@@ -5,5 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "dvc>=3.66.1",
+    "dvc-azure>=3.1.0",
     "speciesnet>=5.0.3",
 ]
