@@ -13,8 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.prod.txt .
-RUN uv pip install --no-cache --prefix=/install -r requirements.prod.txt
+COPY requirements.txt .
+RUN uv pip install --no-cache --prefix=/install -r requirements.txt
 
 
 # ── Stage 2: runtime image ─────────────────────────────────────────────────────
@@ -25,6 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libglib2.0-0 \
         libgomp1 \
         libexpat1 \
+        libgl1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy installed Python packages from builder

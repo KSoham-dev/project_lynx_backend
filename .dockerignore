@@ -15,9 +15,6 @@ build/
 .dvcignore
 *.dvc
 
-# Local model directory (already packed into the tarball)
-model/
-
 # Editor / OS
 .vscode/
 .idea/
