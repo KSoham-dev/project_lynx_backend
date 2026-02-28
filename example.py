@@ -4,13 +4,13 @@ from PIL import Image
 from io import BytesIO
 import os
 
-model_path = '/content/'
+model_path = './model'
 try:
     model = SpeciesNet(model_path)
     print("SpeciesNet model instantiated.")
 except Exception as e:
     print(f"Error instantiating SpeciesNet model: {e}")
-image_save_path = 'https://cdn.discordapp.com/attachments/1384169300545503302/1477200741818171478/image.png?ex=69a3e5e5&is=69a29465&hm=f15986a34a5c4d3aa220bcff9f528978a6036fa7cea5533eb7dbd7d8c40d1323&'
+image_save_path = 'https://inaturalist-open-data.s3.amazonaws.com/photos/605060662/large.jpg'
 instances = [{
     'filepath': image_save_path,
     'latitude': 34.08,
@@ -23,7 +23,7 @@ try:
     if predictions_dict and "predictions" in predictions_dict and predictions_dict["predictions"]:
         prediction = predictions_dict["predictions"][0]
         print("\n--- India Species Prediction ---")
-        print(f"Result: {prediction['classifications']["classes"][0]}")
+        print(f"Result: {prediction['classifications']['classes'][0]}")
     else:
         print("No predictions returned.")
 except Exception as e:
