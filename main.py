@@ -2,11 +2,12 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, HttpUrl
 from contextlib import asynccontextmanager
 from typing import Optional
+import os
 import uvicorn
 
 # ── Model globals ──────────────────────────────────────────────────────────────
 model = None
-MODEL_PATH = "./model"
+MODEL_PATH = os.getenv("MODEL_PATH", "./model")
 
 
 @asynccontextmanager
