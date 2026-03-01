@@ -1,0 +1,24 @@
+m# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Development / tooling
+.git/
+.gitignore
+.dvc/
+.dvcignore
+*.dvc
+
+# Editor / OS
+.vscode/
+.idea/
+*.DS_Store
+
+# Test / example files
+example.py
