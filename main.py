@@ -1,9 +1,14 @@
-from fastapi import FastAPI, HTTPException
+from dotenv import load_dotenv
+load_dotenv()  # must be first — populates os.environ before any module reads it
+
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, HttpUrl
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Any, Optional
 import os
 import uvicorn
+
+from pipeline.species_traits import run_pipeline
 
 # ── Model globals ──────────────────────────────────────────────────────────────
 model = None
@@ -53,6 +58,31 @@ class PredictRequest(BaseModel):
             }
         }
     }
+
+
+class SpeciesTraitsResponse(BaseModel):
+    """Response returned by GET /species/traits."""
+    assessment_id: Optional[Any] = None
+    year_published: Optional[Any] = None
+    scientific_name: Optional[str] = None
+    common_names: list[str] = []
+    category: Optional[str] = None
+    url: Optional[str] = None
+    sis_taxon_id: Optional[Any] = None
+    photo_url: str = "Not available"
+    photo_credit: str = "Not available"
+    # LLM-extracted trait fields
+    lifespan_years: Optional[str] = None
+    mass: Optional[str] = None
+    length: Optional[str] = None
+    short_description: Optional[str] = None
+    human_risk_level: Optional[str] = None
+    human_threat_level: Optional[str] = None
+    fun_fact_1: Optional[str] = None
+    fun_fact_2: Optional[str] = None
+    fun_fact_3: Optional[str] = None
+
+    model_config = {"extra": "allow"}  # surface any extra LLM fields
 
 
 class ClassificationResult(BaseModel):
@@ -181,6 +211,46 @@ def predict_batch(requests_list: list[PredictRequest]):
         )
 
     return responses
+
+
+# ── Species Traits (IUCN + Wikipedia + iNaturalist + Groq) ────────────────────
+
+
+@app.get(
+    "/species/traits",
+    response_model=SpeciesTraitsResponse,
+    tags=["Species Traits"],
+    summary="Get rich trait data for a species by scientific name",
+)
+def species_traits(
+    scientific_name: str = Query(
+        ...,
+        description="Scientific name of the species (e.g. 'Caridina typus').",
+        examples=["Caridina typus", "Panthera leo"],
+        min_length=3,
+    )
+) -> SpeciesTraitsResponse:
+    """
+    Fetch IUCN data from Azure Blob Storage, enrich it with Wikipedia text and
+    iNaturalist photo, then extract structured biological traits via LLM.
+
+    - **scientific_name**: the species scientific name; spaces are fine.
+
+    Results are cached in-process for **24 hours** — repeated calls are
+    near-instant.
+    """
+    try:
+        result = run_pipeline(scientific_name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Pipeline error: {exc}"
+        ) from exc
+
+    return SpeciesTraitsResponse(**result)
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
