@@ -38,6 +38,7 @@ COPY model/ /app/model/
 
 # ── Copy application code ──────────────────────────────────────────────────────
 COPY main.py .
+COPY pipeline/ /app/pipeline/
 
 # ── Security: run as non-root ──────────────────────────────────────────────────
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser \
