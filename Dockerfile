@@ -37,6 +37,7 @@ WORKDIR /app
 COPY model/ /app/model/
 
 # ── Copy application code ──────────────────────────────────────────────────────
+COPY .env .
 COPY main.py .
 COPY pipeline/ /app/pipeline/
 
