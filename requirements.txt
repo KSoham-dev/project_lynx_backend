@@ -205,6 +205,15 @@ zc.lockfile==4.0
 groq>=0.13.0
 cachetools>=5.3.0
 
+# ── Agents / LangChain (Layer 0) ─────────────────────────────────────────────
+langchain>=0.3.0
+langchain-openai>=0.3.0
+langchain-community>=0.3.0
+openai>=1.30.0
+azure-cosmos>=4.7.0
+pydantic-settings>=2.0.0
+
 # ── Dev / test ──────────────────────────────────────────────────────────────
 pytest>=8.0.0
 pytest-cov>=5.0.0
+pytest-asyncio>=0.23.0

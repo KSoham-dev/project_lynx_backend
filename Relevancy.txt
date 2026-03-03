@@ -1,0 +1,121 @@
+"""
+pipeline/agents/image_relevancy.py
+=====================================
+Layer 1 — ImageRelevancy agent
+
+Inspects SpeciesNet detection output to determine whether the image
+actually contains wildlife, as opposed to:
+  - blank / empty frames
+  - vehicles
+  - people / humans
+  - images with no detections at all
+
+Actual SpeciesNet prediction structure (from SpeciesNet source / ensemble_test.py):
+  prediction = {
+      "detections": [                         # LIST of detection dicts
+          {"label": "animal", "conf": 0.93, "bbox": [x1, y1, x2, y2], "category": "1"},
+          ...
+      ],
+      "classifications": {                    # dict used by ImageIdentifier
+          "classes": [...],
+          "scores":  [...]
+      }
+  }
+
+  detections may also be absent or None when no detector ran.
+"""
+from __future__ import annotations
+
+import logging
+
+from semantic_kernel.functions import kernel_function
+
+from .schemas import RelevancyResult
+
+logger = logging.getLogger(__name__)
+
+# ── Thresholds & label sets ────────────────────────────────────────────────────
+DETECTION_SCORE_THRESHOLD = 0.15  # minimum detection confidence to be considered
+
+NON_WILDLIFE_LABELS = frozenset({"blank", "vehicle", "human", "person", "no_cv_result"})
+
+
+class ImageRelevancyPlugin:
+    """
+    Layer 1 — decides whether an image is wildlife-relevant.
+
+    Plugin name registered in Kernel: "relevancy"
+    """
+
+    @kernel_function(
+        name="check_relevancy",
+        description="Determine if a SpeciesNet prediction contains wildlife",
+    )
+    def check_relevancy(self, prediction: dict) -> RelevancyResult:
+        """
+        Inspect bounding-box detections to decide if the image is wildlife-relevant.
+
+        SpeciesNet returns detections as a list of dicts, each with:
+          - "label":  str   ("animal" / "vehicle" / "human" / "blank")
+          - "conf":   float (0-1)
+          - "bbox":   [x1, y1, x2, y2]
+          - "category": str
+
+        Returns RelevancyResult with is_relevant=True only when:
+          1. At least one detection exists.
+          2. Top detection label is NOT in NON_WILDLIFE_LABELS.
+          3. Top detection conf >= DETECTION_SCORE_THRESHOLD.
+
+        If detections list is empty/absent we fall back to checking whether
+        classifications exist — SpeciesNet skips the detector for some inputs.
+        """
+        detections: list[dict] = prediction.get("detections") or []
+
+        # ── No detections at all — fall back to classifications presence ──────
+        if not detections:
+            classifications = prediction.get("classifications") or {}
+            has_classes = bool(classifications.get("classes"))
+            if has_classes:
+                # Detector returned nothing but classifier ran — treat as relevant
+                return RelevancyResult(
+                    is_relevant=True,
+                    reason="No detections but classifications present — treating as relevant.",
+                )
+            return RelevancyResult(
+                is_relevant=False,
+                reason="No detections and no classifications — frame may be blank or corrupted.",
+            )
+
+        # Detections are sorted by confidence descending by SpeciesNet
+        top: dict = detections[0]
+        top_label = str(top.get("label", "")).lower().strip()
+        top_score = float(top.get("conf", 0.0))
+
+        # ── Explicitly non-wildlife detection ────────────────────────────────
+        if top_label in NON_WILDLIFE_LABELS:
+            return RelevancyResult(
+                is_relevant=False,
+                reason=f"Top detection is '{top_label}' — not a wildlife subject.",
+                top_detection_label=top_label,
+                top_detection_score=top_score,
+            )
+
+        # ── Detection below confidence floor ─────────────────────────────────
+        if top_score < DETECTION_SCORE_THRESHOLD:
+            return RelevancyResult(
+                is_relevant=False,
+                reason=(
+                    f"Detection confidence {top_score:.1%} is below the "
+                    f"{DETECTION_SCORE_THRESHOLD:.0%} minimum threshold."
+                ),
+                top_detection_label=top_label,
+                top_detection_score=top_score,
+            )
+
+        # ── Wildlife detected with sufficient confidence ──────────────────────
+        return RelevancyResult(
+            is_relevant=True,
+            reason=f"Detected '{top_label}' with {top_score:.1%} confidence.",
+            top_detection_label=top_label,
+            top_detection_score=top_score,
+        )
