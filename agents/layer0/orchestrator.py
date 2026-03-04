@@ -1,28 +1,36 @@
 """
 agents/layer0/orchestrator.py
 ==============================
-Orchestrator Agent — Layer 0 core of the Prahari multi-agent system.
+Orchestrator Agent — coordinates the full Prahari multi-agent pipeline.
 
-Design: single LLM call + concurrent tool execution
-----------------------------------------------------
-1. ONE LLM API call — used ONLY for tool selection.
-   The LLM reads the user message and context, then returns a list of
-   tool_calls specifying which Layer 1 tools to invoke and with what args.
-   
-2. ALL tools run CONCURRENTLY via asyncio.gather().
-   No sequential waiting. Total tool time = slowest single tool.
+Standard pipeline (EXPLORE / REPORT / ENCYCLOPEDIA)
+------------------------------------------------------
+1. Build messages (system prompt + session history + user context block).
+2. FIRST LLM call — Layer 1 tool selection.
+   Reads the user message + context, returns tool_calls specifying
+   which Layer 1 tools to invoke (analyse_image, analyse_text,
+   location_context) and with what arguments.
 
-3. NO final LLM call — tool results returned directly.
-   The LLM does NOT generate a text response. Layer 2 agents build the
-   human-readable response from structured tool outputs.
+3. Layer 1 tools run CONCURRENTLY via asyncio.gather().
+   analyse_image    → SpeciesNet + GPT vision
+   analyse_text     → Groq trait/severity extraction
+   location_context → Nominatim reverse geocode
 
-Layer 1 tools:
-  analyse_image(image_url, lat, lon)  → SpeciesNet + GPT vision
-  analyse_text(message)               → traits + severity + species ID
-  location_context(lat, lon)          → Nominatim reverse geocode
+4. SECOND LLM call — Layer 2 routing (fully traced in LangSmith).
+   Consolidated Layer 1 results + query_type are sent to the LLM.
+   Three no-arg tools are offered as closures over request + tool_results:
+     generate_exploration_profile (EXPLORE)
+     generate_incident_report     (REPORT)
+     generate_encyclopedia_entry  (ENCYCLOPEDIA)
+   tool_choice is forced to the tool matching the request's query_type,
+   making routing deterministic while keeping full LangSmith trace coverage.
 
-Returns: (tool_results: dict[str, Any])
-  — keyed by tool name, values are JSON-parsed tool outputs.
+5. Layer 2 tool runs inside LangChain's tracing context:
+   SpeciesInfoAgent (shared IUCN fetch) →
+     ExplorerAgent | ReporterAgent | EncyclopediaAgent
+
+Returns: ("", structured_data: dict)
+  structured_data — final Layer 2 response dict, ready for the frontend.
 """
 
 from __future__ import annotations
@@ -75,6 +83,21 @@ SELECTION RULES — only call a tool when its required input is present:
 
 If a field shows "[not provided]" in [Context], do NOT call the tool that requires it.
 For ENCYCLOPEDIA queries: call analyse_text only (no image or location needed).
+"""
+
+
+_LAYER2_ROUTING_PROMPT = """\
+You are a Layer 2 routing agent for Prahari, a wildlife management system.
+
+The Layer 1 analysis is complete. You will be given the consolidated results and
+the requested query type. You MUST select and call EXACTLY ONE Layer 2 tool.
+
+Tool selection rules (strictly follow query_type):
+  EXPLORE      →  call generate_exploration_profile
+  REPORT       →  call generate_incident_report
+  ENCYCLOPEDIA →  call generate_encyclopedia_entry
+
+Do NOT write any text — output ONLY the tool call.
 """
 
 
@@ -248,20 +271,21 @@ async def _run_tool_async(tool_call: dict) -> ToolMessage:
 
 async def run_orchestrator(request: AgentRequest) -> tuple[str, dict[str, Any]]:
     """
-    Single-LLM-call orchestrator with concurrent tool execution.
+    Full pipeline orchestrator: L1 tool selection → L1 tools → L2 routing → L2 agent.
 
     Steps
     -----
-    1. Build messages (system prompt + history + current user message + context).
-    2. ONE LLM API call — get tool selections only.
-    3. ALL selected tools run concurrently via asyncio.gather().
-    4. Persist user message to Cosmos. Return tool_results directly (no 2nd LLM call).
+    1. Build messages (system prompt + session history + user context block).
+    2. FIRST LLM call — selects Layer 1 tools (tool_choice="required").
+    3. Layer 1 tools run concurrently via asyncio.gather().
+    4. Persist user message to Cosmos.
+    5. SECOND LLM call — routes to the appropriate Layer 2 tool (LangSmith-traced).
+       Layer 2 tool (EXPLORE / REPORT / ENCYCLOPEDIA) runs as a LangChain StructuredTool closure.
 
     Returns
     -------
-    ("", tool_results)
-        Empty string — no LLM-generated response text. Layer 2 builds the text.
-        tool_results — dict keyed by tool name with JSON-parsed outputs.
+    ("", structured_data)
+        structured_data — final Layer 2 response dict, ready for the frontend.
     """
     t_start = time.monotonic()
     logger.info(
@@ -385,15 +409,207 @@ async def run_orchestrator(request: AgentRequest) -> tuple[str, dict[str, Any]]:
         except (json.JSONDecodeError, TypeError):
             tool_results[tc["name"]] = msg.content
 
-    # ── 4. Persist user message (no assistant message — no LLM text) ─────────
+    # ── 4. Persist user message ───────────────────────────────────────────────
     await append_message(
         request.session_id, role=MessageRole.USER,
         content=request.message or "", layer=AgentLayer.LAYER0,
     )
 
     logger.info(
-        "[orchestrator] DONE in %.2fs total | tools=%s",
+        "[orchestrator] Layer 1 done in %.2fs total | tools=%s",
         time.monotonic() - t_start,
         list(tool_results.keys()),
     )
-    return "", tool_results
+
+    # ── 5. Layer 2 — LLM-routed via second call (traced in LangSmith) ────────
+    structured_data = await _route_layer2_via_llm(llm, request, tool_results)
+
+    logger.info(
+        "[orchestrator] Pipeline complete in %.2fs",
+        time.monotonic() - t_start,
+    )
+    return "", structured_data
+
+
+# ── Layer 2: LLM routing (second call) ───────────────────────────────────────
+
+async def _route_layer2_via_llm(
+    llm: AzureChatOpenAI,
+    request: AgentRequest,
+    tool_results: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Second LLM call — routes to the appropriate Layer 2 agent
+    (EXPLORE, REPORT, or ENCYCLOPEDIA).
+
+    Builds three no-argument tool closures that close over the current
+    ``request`` and ``tool_results``, so LangChain/LangSmith traces both
+    the routing LLM call and the Layer 2 tool execution.
+
+    Falls back to direct dispatch if the LLM fails to return a tool call.
+    """
+    from langchain_core.tools import StructuredTool
+
+    from agents.enums import QueryType as QT
+    from agents.layer2.encyclopedia import EncyclopediaAgent
+    from agents.layer2.explorer import ExplorerAgent
+    from agents.layer2.reporter import ReporterAgent
+    from agents.layer2.species_info import SpeciesInfoAgent
+
+    # ── Tool closures (capture request + tool_results) ────────────────────
+    async def _explore() -> str:
+        iucn = await SpeciesInfoAgent().run(request, tool_results)
+        result = await ExplorerAgent().run(request, tool_results, iucn)
+        return json.dumps(result, default=str)
+
+    async def _report() -> str:
+        iucn = await SpeciesInfoAgent().run(request, tool_results)
+        result = await ReporterAgent().run(request, tool_results, iucn)
+        return json.dumps(result, default=str)
+
+    async def _encyclopedia() -> str:
+        iucn = await SpeciesInfoAgent().run(request, tool_results)
+        result = await EncyclopediaAgent().run(request, tool_results, iucn)
+        return json.dumps(result, default=str)
+
+    exp_tool = StructuredTool.from_function(
+        coroutine=_explore,
+        name="generate_exploration_profile",
+        description=(
+            "Generate an in-depth species exploration profile with traits, "
+            "habitat information, and photographs."
+        ),
+    )
+    rep_tool = StructuredTool.from_function(
+        coroutine=_report,
+        name="generate_incident_report",
+        description=(
+            "Generate an official wildlife incident report PDF and save "
+            "it to Cosmos DB."
+        ),
+    )
+    enc_tool = StructuredTool.from_function(
+        coroutine=_encyclopedia,
+        name="generate_encyclopedia_entry",
+        description=(
+            "Return the raw IUCN data and iNaturalist photo for a species "
+            "identified in the Layer 1 analysis — no additional LLM calls."
+        ),
+    )
+
+    _TOOL_MAP: dict = {
+        QT.EXPLORE:      ("generate_exploration_profile", exp_tool),
+        QT.REPORT:       ("generate_incident_report",     rep_tool),
+        QT.ENCYCLOPEDIA: ("generate_encyclopedia_entry",  enc_tool),
+    }
+    tool_name, l2_tool = _TOOL_MAP.get(
+        request.query_type, ("generate_incident_report", rep_tool)
+    )
+    all_l2_tools = [exp_tool, rep_tool, enc_tool]
+
+    # ── Build Layer 1 summary for LLM context ────────────────────────────
+    l1_summary = json.dumps(tool_results, indent=2, default=str)
+    layer2_msgs: List[BaseMessage] = [
+        SystemMessage(content=_LAYER2_ROUTING_PROMPT),
+        HumanMessage(content=(
+            f"Query type: "
+            f"{request.query_type.value if request.query_type else 'report'}\n\n"
+            f"Consolidated Layer 1 analysis results:\n{l1_summary}\n\n"
+            "Call the appropriate Layer 2 tool now."
+        )),
+    ]
+
+    # ── Second LLM call ───────────────────────────────────────────────────
+    llm_l2 = llm.bind_tools(all_l2_tools, tool_choice=tool_name, parallel_tool_calls=False)
+    logger.info("[orchestrator] Layer 2 LLM call — routing to tool %r", tool_name)
+    t_l2 = time.monotonic()
+    try:
+        l2_response: AIMessage = await llm_l2.ainvoke(layer2_msgs)
+    except Exception as exc:
+        logger.error("[orchestrator] Layer 2 LLM call failed: %s", exc, exc_info=True)
+        return await _direct_dispatch_layer2(request, tool_results)
+
+    logger.info("[orchestrator] Layer 2 LLM responded in %.2fs", time.monotonic() - t_l2)
+
+    l2_tool_calls = getattr(l2_response, "tool_calls", [])
+    if not l2_tool_calls:
+        logger.warning(
+            "[orchestrator] Layer 2 LLM returned no tool calls — falling back to direct dispatch"
+        )
+        return await _direct_dispatch_layer2(request, tool_results)
+
+    l2_tc = l2_tool_calls[0]
+    logger.info("[orchestrator] Layer 2 tool selected: %r", l2_tc["name"])
+
+    # ── Run Layer 2 tool (traced by LangChain) ────────────────────────────
+    t_l2_tool = time.monotonic()
+    try:
+        l2_result_raw = await l2_tool.ainvoke(l2_tc.get("args") or {})
+    except Exception as exc:
+        logger.error("[orchestrator] Layer 2 tool %r failed: %s", l2_tc["name"], exc, exc_info=True)
+        # Still close the LangSmith loop so the span isn't left open
+        _tool_err_msg = ToolMessage(
+            content=f"Tool failed: {exc}",
+            tool_call_id=l2_tc.get("id", ""),
+            name=l2_tc["name"],
+        )
+        try:
+            await llm.ainvoke(layer2_msgs + [l2_response, _tool_err_msg])
+        except Exception:
+            pass
+        return {}
+
+    logger.info("[orchestrator] Layer 2 tool done in %.2fs", time.monotonic() - t_l2_tool)
+
+    # ── Close the agent loop so LangSmith marks the tool call completed ───
+    # Append the AIMessage (which contains the tool_call) and the ToolMessage
+    # (which carries the result) back to the LLM.  This is the standard
+    # LangChain agent pattern — without it LangSmith never receives the "end"
+    # event for the tool span, so the trace shows as still running.
+    tool_close_msg = ToolMessage(
+        content=(l2_result_raw or "")[:500],   # truncated — we only need to close the span
+        tool_call_id=l2_tc.get("id", ""),
+        name=l2_tc["name"],
+    )
+    try:
+        await llm.ainvoke(layer2_msgs + [l2_response, tool_close_msg])
+    except Exception as close_exc:
+        logger.warning("[orchestrator] Loop-close LLM call failed (non-fatal): %s", close_exc)
+
+    try:
+        return json.loads(l2_result_raw)
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("[orchestrator] Layer 2 result non-JSON: %.200s", str(l2_result_raw)[:200])
+        return {}
+
+
+async def _direct_dispatch_layer2(
+    request: AgentRequest,
+    tool_results: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Fallback: dispatch Layer 2 without a second LLM call.
+    Used when the routing LLM fails or returns no tool calls.
+    """
+    logger.info("[orchestrator] Direct Layer 2 dispatch query_type=%s", request.query_type)
+    try:
+        from agents.layer2.species_info import SpeciesInfoAgent
+        iucn_data = await SpeciesInfoAgent().run(request, tool_results)
+
+        from agents.enums import QueryType as QT
+        if request.query_type == QT.ENCYCLOPEDIA:
+            from agents.layer2.encyclopedia import EncyclopediaAgent
+            return await EncyclopediaAgent().run(request, tool_results, iucn_data) or {}
+
+        if request.query_type == QT.EXPLORE:
+            from agents.layer2.explorer import ExplorerAgent
+            return await ExplorerAgent().run(request, tool_results, iucn_data) or {}
+
+        from agents.layer2.reporter import ReporterAgent
+        return await ReporterAgent().run(request, tool_results, iucn_data) or {}
+
+    except Exception as exc:
+        logger.error("[orchestrator] Direct Layer 2 dispatch failed: %s", exc, exc_info=True)
+        return {}
+
+

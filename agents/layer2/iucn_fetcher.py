@@ -20,61 +20,51 @@ logger = logging.getLogger(__name__)
 
 
 def _extract_iucn_fields(raw: dict[str, Any]) -> dict[str, Any]:
-    """Extract and normalise key IUCN assessment fields from the raw blob JSON."""
-    taxon: dict = raw.get("taxon") or {}
-    common_names = taxon.get("common_names") or []
-    main_names = [c["name"] for c in common_names if c.get("main")]
+    """Return the raw IUCN blob data exactly as stored — no field filtering or transformation."""
+    return raw
 
-    def _safe(d: Any, *keys: str, default: Any = None) -> Any:
-        for k in keys:
-            try:
-                d = d[k]
-            except (KeyError, TypeError, IndexError):
-                return default
-        return d or default
 
-    return {
-        "assessment_id":         raw.get("assessment_id"),
-        "year_published":        raw.get("year_published"),
-        "scientific_name":       taxon.get("scientific_name"),
-        "common_names":          main_names,
-        "red_list_category":     _safe(raw, "red_list_category", "description", "en"),
-        "red_list_code":         _safe(raw, "red_list_category", "code"),
-        "population_trend":      _safe(raw, "population", "trend", "description", "en"),
-        "population_size":       _safe(raw, "population", "size"),
-        "geographic_range":      _safe(raw, "geographic_range", "description"),
-        "habitats": [
-            {
-                "name":       h.get("description", {}).get("en"),
-                "suitability": _safe(h, "suitability", "description", "en"),
-                "season":     _safe(h, "season", "description", "en"),
-            }
-            for h in (raw.get("habitats") or [])[:5]
-        ],
-        "threats": [
-            {
-                "title":  t.get("description", {}).get("en"),
-                "timing": _safe(t, "timing", "description", "en"),
-                "scope":  _safe(t, "scope", "description", "en"),
-                "impact": _safe(t, "impact", "description", "en"),
-            }
-            for t in (raw.get("threats") or [])[:8]
-        ],
-        "conservation_actions": [
-            a.get("description", {}).get("en")
-            for a in (raw.get("conservation_actions") or [])[:6]
-        ],
-        "use_trade": [
-            {
-                "description": u.get("description", {}).get("en"),
-                "purpose":     _safe(u, "purpose", "description", "en"),
-            }
-            for u in (raw.get("use_trade") or [])[:4]
-        ],
-        "url":          raw.get("url"),
-        "sis_taxon_id": raw.get("sis_taxon_id"),
-        "references":   (raw.get("references") or [])[:10],
-    }
+# ── Read-only accessors for the raw blob nested structure ─────────────────────
+# These helpers let callers read fields without duplicating nested-key logic.
+# They never modify or copy the data.
+
+def iucn_scientific_name(raw: dict[str, Any]) -> str:
+    return ((raw.get("taxon") or {}).get("scientific_name") or "").strip()
+
+def iucn_common_names(raw: dict[str, Any]) -> list[str]:
+    entries = (raw.get("taxon") or {}).get("common_names") or []
+    return [c["name"] for c in entries if c.get("main")]
+
+def iucn_taxon_field(raw: dict[str, Any], key: str) -> Any:
+    """Read any field directly from the taxon sub-object (genus, family, kingdom, …)."""
+    return (raw.get("taxon") or {}).get(key)
+
+def iucn_red_list_category(raw: dict[str, Any]) -> str:
+    rl = raw.get("red_list_category") or {}
+    return ((rl.get("description") or {}).get("en") or "").strip()
+
+def iucn_red_list_code(raw: dict[str, Any]) -> str:
+    return ((raw.get("red_list_category") or {}).get("code") or "").strip().upper()
+
+def iucn_population_trend(raw: dict[str, Any]) -> str:
+    trend = ((raw.get("population") or {}).get("trend") or {})
+    return ((trend.get("description") or {}).get("en") or "").strip()
+
+def iucn_threat_titles(raw: dict[str, Any], limit: int = 4) -> list[str]:
+    """Return the English description of the top threats (for prompt context)."""
+    return [
+        ((t.get("description") or {}).get("en") or "")
+        for t in (raw.get("threats") or [])[:limit]
+        if (t.get("description") or {}).get("en")
+    ]
+
+def iucn_habitat_names(raw: dict[str, Any], limit: int = 4) -> list[str]:
+    """Return the English description of the top habitats (for prompt context)."""
+    return [
+        ((h.get("description") or {}).get("en") or "")
+        for h in (raw.get("habitats") or [])[:limit]
+        if (h.get("description") or {}).get("en")
+    ]
 
 
 async def get_iucn_raw(scientific_name: str) -> dict[str, Any]:
