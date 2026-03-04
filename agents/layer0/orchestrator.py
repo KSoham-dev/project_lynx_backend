@@ -1,33 +1,36 @@
 """
 agents/layer0/orchestrator.py
 ==============================
-Orchestrator Agent — Layer 0 brain of the Prahari multi-agent system.
+Orchestrator Agent — Layer 0 core of the Prahari multi-agent system.
 
-Architecture
-------------
-* LLM  : Azure OpenAI ``gpt-4o-mini`` via LangChain ``AzureChatOpenAI``
-* Tools: Stub tools representing Layer 1 integrations (bound via ``bind_tools``)
-* Loop : Tool-calling loop (LCEL pattern) — LLM decides which tools to call,
-         we dispatch, then feed results back until the LLM issues a final answer.
-* Memory: Prior session messages are prepended to every invocation from Cosmos DB.
+Design: single LLM call + concurrent tool execution
+----------------------------------------------------
+1. ONE LLM API call — used ONLY for tool selection.
+   The LLM reads the user message and context, then returns a list of
+   tool_calls specifying which Layer 1 tools to invoke and with what args.
+   
+2. ALL tools run CONCURRENTLY via asyncio.gather().
+   No sequential waiting. Total tool time = slowest single tool.
 
-Stub tools (wired to Layer 1 in a later sprint)
-------------------------------------------------
-``relevancy_check``   – determine if the user's message is wildlife-related
-``location_context``  – extract / validate GPS / place context
-``image_identifier``  – delegate to the SpeciesNet /predict endpoint
-``context_text``      – retrieve IUCN / Wikipedia enrichment for a species
+3. NO final LLM call — tool results returned directly.
+   The LLM does NOT generate a text response. Layer 2 agents build the
+   human-readable response from structured tool outputs.
 
-Public API
-----------
-    agent_request = await run_receiver(payload)
-    response_text = await run_orchestrator(agent_request)
+Layer 1 tools:
+  analyse_image(image_url, lat, lon)  → SpeciesNet + GPT vision
+  analyse_text(message)               → traits + severity + species ID
+  location_context(lat, lon)          → Nominatim reverse geocode
+
+Returns: (tool_results: dict[str, Any])
+  — keyed by tool name, values are JSON-parsed tool outputs.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import time
 from typing import Any, List, Optional
 
 from langchain_core.messages import (
@@ -43,31 +46,44 @@ from langchain_openai import AzureChatOpenAI
 from agents.enums import AgentLayer, MessageRole
 from agents.layer0.config import get_settings
 from agents.layer0.receiver import AgentRequest
-from agents.state.session_store import append_message, get_session
+from agents.state.session_store import append_message
 
 logger = logging.getLogger(__name__)
 
-# ── System prompt ─────────────────────────────────────────────────────────────
+# ── System prompt factory ─────────────────────────────────────────────────────
 
-_SYSTEM_PROMPT = """\
-You are Prahari, an intelligent wildlife assistant for general public, forest
-officials, and conservation officers in India.
+_TOOL_SELECTION_PROMPT = """\
+You are a tool-selection router for Prahari, a wildlife assistant system.
 
-Your goals:
-1. Help users identify wildlife from images, GPS coordinates, and text descriptions.
-2. Provide species information (IUCN status, danger level, behaviour, habitat).
-3. Assist with incident and sighting reports.
-4. Always prioritise user safety.
+Your ONLY job is to choose which tools to call based on the incoming request.
+You MUST select ALL applicable tools simultaneously in your first (and ONLY) response.
+Do NOT write any text — output ONLY tool calls.
 
-Tool usage rules:
-- Use ``analyse_image`` whenever the user provides an image URL.
-  Always pass latitude and longitude if available — they improve accuracy.
-- Use ``context_text`` after identification to get IUCN / trait details.
-- Use ``location_context`` when the user asks about a specific area or GPS location.
-- If a query is unrelated to wildlife, conservation, or safety, politely decline.
+SELECTION RULES — only call a tool when its required input is present:
+
+  Call analyse_text(message) ONLY when [Context] shows:
+    Text message: (something other than [not provided])
+    — NEVER call it when Text message is [not provided].
+
+  Call analyse_image(image_url, latitude, longitude) ONLY when [Context] shows:
+    Image URL: (something other than [not provided])
+    — Pass latitude/longitude from Context if they are not [not provided].
+
+  Call location_context(latitude, longitude) ONLY when [Context] shows:
+    GPS coordinates: (something other than [not provided])
+    — Pass the exact values given.
+
+If a field shows "[not provided]" in [Context], do NOT call the tool that requires it.
+For ENCYCLOPEDIA queries: call analyse_text only (no image or location needed).
 """
 
-# ── Layer 1 tool — real image analysis (replaces relevancy_check + image_identifier stubs)
+
+def _build_system_prompt(query_type: str) -> str:
+    """Return the tool-selection system prompt (same for all query types)."""
+    return _TOOL_SELECTION_PROMPT
+
+
+# ── Tool definitions ──────────────────────────────────────────────────────────
 
 @tool
 async def analyse_image(
@@ -78,46 +94,22 @@ async def analyse_image(
     """
     Detect and identify wildlife in an image.
 
-    Runs the full Layer 1 pipeline:
-      1. Detection-based relevancy check (is there an animal?).
-      2. Two-stage species identification:
-           - SpeciesNet label parsing if confidence >= 80% and not priority genus.
-           - GPT-4o-mini vision fallback otherwise.
-      3. Returns JSON with: is_relevant, scientific_name, confidence,
-         identification_source (model|gpt), family, genus.
+    Runs SpeciesNet → relevancy check → two-stage species identification
+    (SpeciesNet model, then GPT vision fallback for priority genera).
 
-    Always pass latitude and longitude when available — SpeciesNet uses them
-    to improve geo-constrained classification.
+    Returns JSON: is_relevant, scientific_name, confidence,
+    identification_source (model|gpt), family, genus.
+
+    Call this whenever an Image URL is present in the request context.
     """
     from agents.layer1.image_agent import get_image_agent
+    logger.info("[analyse_image] START url=%.60s lat=%s lon=%s", image_url, latitude, longitude)
+    t0 = time.monotonic()
     agent = get_image_agent()
     result = await agent.run(image_url, latitude, longitude)
+    logger.info("[analyse_image] DONE in %.2fs: relevant=%s species=%s",
+                time.monotonic() - t0, result.is_relevant, result.scientific_name)
     return result.model_dump_json()
-
-
-# ── Remaining Layer 1 stubs (context_text + location_context) ─────────────────
-
-@tool
-def location_context(latitude: float, longitude: float) -> str:
-    """
-    Given GPS coordinates, return the forest zone, district, and protected
-    area name (if any).
-    [STUB — Layer 1 Location agent will replace this implementation]
-    """
-    logger.debug("[STUB] location_context called: lat=%s lon=%s", latitude, longitude)
-    return f"Location context for ({latitude}, {longitude}): [stub — to be implemented in Layer 1]"
-
-
-
-@tool
-def context_text(species_name: str) -> str:
-    """
-    Retrieve enriched species information: IUCN status, habitat, danger level,
-    and Wikipedia summary.
-    [STUB — Layer 1 Context/Text agent will replace this implementation]
-    """
-    logger.debug("[STUB] context_text called: %s", species_name)
-    return f"Species context for '{species_name}': [stub — to be implemented in Layer 1]"
 
 
 @tool
@@ -125,200 +117,283 @@ async def analyse_text(message: str) -> str:
     """
     Analyse a user's text message about a wildlife sighting or encounter.
 
-    Returns a JSON object with three sections:
-      - traits: extracted animal characteristics (size, colour, behaviour,
-                distinctive features, count, movement)
-      - severity: semantic/intent severity of the message
-                  (critical | high | medium | low | informational)
-      - species identification from text: scientific name, common name,
-                  confidence — 'null' scientific_name means UNIDENTIFIED.
+    Returns JSON with:
+      - traits: size, colour, behaviour, movement, distinctive_features, count
+      - severity: critical | high | medium | low | informational
+      - scientific_name, common_name, identification_confidence
+        (scientific_name is null if species cannot be identified from text alone)
 
-    Use this tool whenever the user sends a text description of an animal
-    (with or without an image). Always call this before context_text so
-    you have the species name to look up.
+    Always call this for any wildlife-related user message.
     """
     from agents.layer1.text_agent import get_text_agent
+    logger.info("[analyse_text] START: message_len=%d", len(message))
+    t0 = time.monotonic()
     agent = get_text_agent()
     result = await agent.run(message)
+    logger.info("[analyse_text] DONE in %.2fs: severity=%s species=%s confidence=%s",
+                time.monotonic() - t0, result.severity.value,
+                result.scientific_name or "UNIDENTIFIED", result.identification_confidence)
     return result.model_dump_json()
 
 
-_TOOLS = [analyse_image, analyse_text, location_context, context_text]
+@tool
+async def location_context(latitude: float, longitude: float) -> str:
+    """
+    Reverse-geocode GPS coordinates into district, state, protected area.
+
+    Returns JSON: district, state, country, protected_area, geohash, formatted.
+    Call this whenever GPS coordinates are present in the request context.
+    """
+    from agents.layer1.location import get_location_context
+    logger.info("[location_context] START: lat=%s lon=%s", latitude, longitude)
+    t0 = time.monotonic()
+    result = await get_location_context(latitude, longitude)
+    logger.info("[location_context] DONE in %.2fs: district=%r state=%r",
+                time.monotonic() - t0, result.get("district"), result.get("state"))
+    return json.dumps(result)
+
+
+# ── Tool registry ─────────────────────────────────────────────────────────────
+
+_TOOLS = [analyse_image, analyse_text, location_context]
 _TOOLS_BY_NAME: dict[str, Any] = {t.name: t for t in _TOOLS}
-_ASYNC_TOOLS: frozenset[str] = frozenset({"analyse_image", "analyse_text"})
+
+
+def _available_tools(request: AgentRequest) -> list:
+    """
+    Return only the tools applicable to the current request payload.
+
+    This prevents the LLM from even seeing — and therefore accidentally
+    calling — tools whose required inputs are absent.  The mapping is:
+
+        analyse_text       ← message is non-empty
+        analyse_image      ← image_url is present
+        location_context   ← both latitude AND longitude are present
+    """
+    tools = []
+    if request.message:
+        tools.append(analyse_text)
+    if request.image_url:
+        tools.append(analyse_image)
+    if request.latitude is not None and request.longitude is not None:
+        tools.append(location_context)
+    if not tools:
+        logger.warning(
+            "[orchestrator] No applicable tools — payload has no message, image, or GPS."
+        )
+    return tools
+
 
 # ── LLM factory ───────────────────────────────────────────────────────────────
 
 def _build_llm() -> AzureChatOpenAI:
-    """Construct the Azure OpenAI LLM client from settings."""
+    """
+    Construct the Azure LLM client.
+
+    max_tokens=1024 — enough room for 3 tool call JSONs with headroom to spare.
+    """
     s = get_settings()
     return AzureChatOpenAI(
         azure_endpoint=s.azure_openai_endpoint,
         api_key=s.azure_openai_api_key,          # type: ignore[arg-type]
         azure_deployment=s.azure_openai_deployment,
         api_version=s.azure_openai_api_version,
-        max_tokens=1024
+        max_tokens=1024,
     )
 
 
-# ── Cosmos DB–backed chat history (in-memory snapshot) ────────────────────────
+# ── Session history → LangChain messages ──────────────────────────────────────
 
 def _session_to_lc_messages(request: AgentRequest) -> List[BaseMessage]:
     """
-    Convert persisted :class:`MessageRecord` objects to LangChain message types.
-    Prepended to every new invocation as conversation context.
+    Build the message list: system prompt + session history.
+    Uses the same tool-selection prompt regardless of query type.
     """
-    lc_messages: List[BaseMessage] = [SystemMessage(content=_SYSTEM_PROMPT)]
+    lc_messages: List[BaseMessage] = [
+        SystemMessage(content=_build_system_prompt(
+            request.query_type.value if request.query_type else "report"
+        ))
+    ]
     for record in request.session.messages:
         if record.role == "user":
             lc_messages.append(HumanMessage(content=record.content))
         elif record.role == "assistant":
             lc_messages.append(AIMessage(content=record.content))
-        elif record.role == "system":
-            lc_messages.append(SystemMessage(content=record.content))
     return lc_messages
 
 
-# ── Tool execution helper ─────────────────────────────────────────────────────
-
-def _run_tool(tool_call: dict) -> ToolMessage:
-    """Invoke a synchronous tool call and return a ToolMessage."""
-    tool_name = tool_call["name"]
-    tool_args = tool_call["args"]
-    tool_fn = _TOOLS_BY_NAME.get(tool_name)
-
-    if tool_fn is None:
-        result = f"Error: unknown tool '{tool_name}'"
-    else:
-        try:
-            result = tool_fn.invoke(tool_args)
-        except Exception as exc:  # noqa: BLE001
-            result = f"Tool error: {exc}"
-
-    return ToolMessage(
-        content=str(result),
-        tool_call_id=tool_call.get("id", tool_name),
-    )
-
+# ── Concurrent tool runner ────────────────────────────────────────────────────
 
 async def _run_tool_async(tool_call: dict) -> ToolMessage:
-    """Invoke an async tool call and return a ToolMessage."""
+    """Invoke an async tool and return a ToolMessage."""
     tool_name = tool_call["name"]
-    tool_args = tool_call["args"]
     tool_fn = _TOOLS_BY_NAME.get(tool_name)
 
     if tool_fn is None:
         result = f"Error: unknown tool '{tool_name}'"
     else:
         try:
-            result = await tool_fn.ainvoke(tool_args)
-        except Exception as exc:  # noqa: BLE001
+            result = await tool_fn.ainvoke(tool_call["args"])
+        except Exception as exc:
+            logger.error("[orchestrator] Tool %r failed: %s", tool_name, exc, exc_info=True)
             result = f"Tool error: {exc}"
 
     return ToolMessage(
         content=str(result),
         tool_call_id=tool_call.get("id", tool_name),
     )
-
-
-# ── Tool-calling loop ──────────────────────────────────────────────────────────
-
-async def _run_tool_loop(
-    llm_with_tools: AzureChatOpenAI,
-    messages: List[BaseMessage],
-    max_iterations: int = 6,
-) -> str:
-    """
-    Execute a multi-turn tool-calling loop:
-    1. Call LLM (with tools bound).
-    2. If the response contains tool_calls, execute them and add ToolMessages.
-    3. Repeat until the LLM returns a final text answer (no tool_calls).
-
-    Returns the final text content.
-    """
-    for iteration in range(max_iterations):
-        response: AIMessage = await llm_with_tools.ainvoke(messages)
-        messages.append(response)
-
-        # If no tool calls in response, we have the final answer
-        tool_calls = getattr(response, "tool_calls", None) or []
-        if not tool_calls:
-            return response.content or ""
-
-        logger.debug("Iteration %d: executing %d tool call(s)", iteration + 1, len(tool_calls))
-
-        # Execute all tool calls — use async runner for async tools, sync for sync
-        for tc in tool_calls:
-            if tc["name"] in _ASYNC_TOOLS:
-                tool_msg = await _run_tool_async(tc)
-            else:
-                tool_msg = _run_tool(tc)
-            messages.append(tool_msg)
-
-    # Safety fallback: return last content if loop exhausted
-    last = messages[-1]
-    return getattr(last, "content", "") or ""
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
-async def run_orchestrator(request: AgentRequest) -> str:
+async def run_orchestrator(request: AgentRequest) -> tuple[str, dict[str, Any]]:
     """
-    Invoke the LangChain tool-calling orchestrator for one turn.
+    Single-LLM-call orchestrator with concurrent tool execution.
 
     Steps
     -----
-    1. Build message list from system prompt + stored session history.
-    2. Append the current user message.
-    3. Run tool-calling loop (LLM → tools → LLM → … → final answer).
-    4. Persist both the user message and AI response to Cosmos DB.
-    5. Return the final response string.
-
-    Parameters
-    ----------
-    request:
-        Normalised agent request from :func:`agents.layer0.receiver.run_receiver`.
+    1. Build messages (system prompt + history + current user message + context).
+    2. ONE LLM API call — get tool selections only.
+    3. ALL selected tools run concurrently via asyncio.gather().
+    4. Persist user message to Cosmos. Return tool_results directly (no 2nd LLM call).
 
     Returns
     -------
-    str
-        The orchestrator's final text response to the user.
+    ("", tool_results)
+        Empty string — no LLM-generated response text. Layer 2 builds the text.
+        tool_results — dict keyed by tool name with JSON-parsed outputs.
     """
+    t_start = time.monotonic()
     logger.info(
-        "Orchestrator invoked: session=%s user=%s message_len=%d",
-        request.session_id,
-        request.user_id,
-        len(request.message),
+        "[orchestrator] START session=%s user=%s query_type=%s image=%s gps=%s",
+        request.session_id, request.user_id, request.query_type,
+        bool(request.image_url),
+        bool(request.latitude is not None),
     )
 
-    # 1 — build message history from session
-    messages: List[BaseMessage] = _session_to_lc_messages(request)
+    # ── 1. Build message list ────────────────────────────────────────────────
+    messages = _session_to_lc_messages(request)
 
-    # 2 — append current user turn
-    messages.append(HumanMessage(content=request.message))
+    # Build an explicit [Context] block so absent fields are clearly labelled "[not provided]".
+    # The LLM reads these labels to decide which tools to call; _available_tools() enforces
+    # the same rules programmatically so absent-input tools are never even offered.
+    context_lines: list[str] = [
+        f"Text message: {request.message!r}" if request.message else "Text message: [not provided]",
+        f"Image URL: {request.image_url}" if request.image_url else "Image URL: [not provided]",
+        (
+            f"GPS coordinates: latitude={request.latitude}, longitude={request.longitude}"
+            if request.latitude is not None and request.longitude is not None
+            else "GPS coordinates: [not provided]"
+        ),
+    ]
+    user_content = (request.message or "[no message]") + "\n\n[Context]\n" + "\n".join(context_lines)
+    messages.append(HumanMessage(content=user_content))
 
-    # 3 — build LLM with tools bound and run loop
+    # ── 2. Single LLM call — tool selection only ─────────────────────────────
+    applicable_tools = _available_tools(request)
+    if not applicable_tools:
+        logger.error("[orchestrator] No inputs present — cannot route request.")
+        return "", {}
+
     llm = _build_llm()
-    llm_with_tools = llm.bind_tools(_TOOLS)  # type: ignore[arg-type]
-    response_text = await _run_tool_loop(llm_with_tools, messages)
+    # tool_choice="required" forces the API to guarantee at least one tool call
+    # is returned, eliminating silent hallucination-as-text responses.
+    # parallel_tool_calls=True allows multiple tools to be selected in one response.
+    llm_with_tools = llm.bind_tools(applicable_tools, tool_choice="required", parallel_tool_calls=True)
 
-    # 4 — persist both turns to Cosmos DB
-    await append_message(
-        request.session_id,
-        role=MessageRole.USER,
-        content=request.message,
-        layer=AgentLayer.LAYER0,
+    logger.info("[orchestrator] LLM call (tool selection)")
+    t_llm = time.monotonic()
+    response: AIMessage = await llm_with_tools.ainvoke(messages)
+    logger.info("[orchestrator] LLM responded in %.2fs", time.monotonic() - t_llm)
+
+    tool_calls = getattr(response, "tool_calls", None) or []
+    if not tool_calls:
+        # ── Diagnostics: log what the model actually returned ────────────────
+        finish_reason = (
+            (response.response_metadata or {}).get("finish_reason")
+            or (response.response_metadata or {}).get("stop_reason")
+            or "unknown"
+        )
+        content_preview = (response.content or "")[:300].replace("\n", " ")
+        logger.warning(
+            "[orchestrator] LLM returned NO tool calls on first attempt — retrying. "
+            "finish_reason=%r content=%r",
+            finish_reason, content_preview,
+        )
+
+        # ── Single retry: inject a hard correction turn ───────────────────────
+        retry_messages = messages + [
+            AIMessage(content=response.content or ""),
+            HumanMessage(
+                content=(
+                    "IMPORTANT: You must call the appropriate tools. "
+                    "Do NOT write any text response. "
+                    "Call the tools now based on the context provided above."
+                )
+            ),
+        ]
+        logger.info("[orchestrator] LLM retry call (tool selection)")
+        t_retry = time.monotonic()
+        response = await llm_with_tools.ainvoke(retry_messages)
+        logger.info("[orchestrator] LLM retry responded in %.2fs", time.monotonic() - t_retry)
+
+        tool_calls = getattr(response, "tool_calls", None) or []
+        if not tool_calls:
+            finish_reason_retry = (
+                (response.response_metadata or {}).get("finish_reason")
+                or (response.response_metadata or {}).get("stop_reason")
+                or "unknown"
+            )
+            content_preview_retry = (response.content or "")[:300].replace("\n", " ")
+            logger.error(
+                "[orchestrator] LLM returned NO tool calls after retry — aborting. "
+                "finish_reason=%r content=%r "
+                "Check LangSmith trace for tool definitions in request.",
+                finish_reason_retry, content_preview_retry,
+            )
+            await append_message(
+                request.session_id, role=MessageRole.USER,
+                content=request.message or "", layer=AgentLayer.LAYER0,
+            )
+            return "", {}
+
+    logger.info(
+        "[orchestrator] Tools selected: %s",
+        [tc["name"] for tc in tool_calls],
     )
+    for tc in tool_calls:
+        logger.info(
+            "[orchestrator] ▶ %r args=%s",
+            tc["name"],
+            {k: str(v)[:80] for k, v in tc.get("args", {}).items()},
+        )
+
+    # ── 3. Run ALL tools concurrently ────────────────────────────────────────
+    t_tools = time.monotonic()
+    tool_msgs: list[ToolMessage] = await asyncio.gather(
+        *[_run_tool_async(tc) for tc in tool_calls]
+    )
+    logger.info("[orchestrator] All tools done in %.2fs", time.monotonic() - t_tools)
+
+    # Parse each tool result
+    tool_results: dict[str, Any] = {}
+    for tc, msg in zip(tool_calls, tool_msgs):
+        preview = str(msg.content)[:200].replace("\n", " ")
+        logger.info("[orchestrator] ◀ %r: %s…", tc["name"], preview)
+        try:
+            tool_results[tc["name"]] = json.loads(msg.content)
+        except (json.JSONDecodeError, TypeError):
+            tool_results[tc["name"]] = msg.content
+
+    # ── 4. Persist user message (no assistant message — no LLM text) ─────────
     await append_message(
-        request.session_id,
-        role=MessageRole.ASSISTANT,
-        content=response_text,
-        layer=AgentLayer.LAYER0,
+        request.session_id, role=MessageRole.USER,
+        content=request.message or "", layer=AgentLayer.LAYER0,
     )
 
     logger.info(
-        "Orchestrator response: session=%s chars=%d",
-        request.session_id,
-        len(response_text),
+        "[orchestrator] DONE in %.2fs total | tools=%s",
+        time.monotonic() - t_start,
+        list(tool_results.keys()),
     )
-    return response_text
+    return "", tool_results

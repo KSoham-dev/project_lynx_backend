@@ -1,28 +1,25 @@
 """
 agents/layer0/router.py
 ========================
-FastAPI router exposing the Layer 0 Orchestrator via HTTP.
+FastAPI router — POST /agent/chat
 
-Endpoints
----------
-POST /agent/chat
-    Accept a frontend payload, run it through the Receiver then Orchestrator,
-    and return the AI response together with the session_id so the client can
-    resume the conversation on subsequent calls.
-
-Device headers (set by React frontend)
----------------------------------------
-    X-Device-ID   – stable UUID stored in client localStorage
-    X-FCM-Token   – Firebase Cloud Messaging token for web-push notifications
+Flow:
+  1. Receiver   → load/create Cosmos session
+  2. Orchestrator → LLM tool loop (analyse_image, analyse_text, location_context)
+                  → returns (response_text, tool_results)
+  3. Layer 2    → enrichment + persistence based on query_type
+  4. Return ChatResponse {response, data}
 """
 
 from __future__ import annotations
 
 import logging
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from agents.enums import QueryType
 from agents.layer0.orchestrator import run_orchestrator
 from agents.layer0.receiver import ReceiverInput, run_receiver
 
@@ -34,69 +31,66 @@ router = APIRouter(prefix="/agent", tags=["Agent"])
 # ── Response schema ───────────────────────────────────────────────────────────
 
 class ChatResponse(BaseModel):
-    """Response returned by POST /agent/chat."""
-
     session_id: str
     user_id: str
     query_type: str
-    response: str
+    response: str                          # LLM conversational text
+    data: Optional[dict[str, Any]] = None  # structured species / IUCN data
 
-    model_config = {
-        "json_schema_extra": {
-            "example": {
-                "session_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-                "user_id": "ranger-42",
-                "query_type": "report",
-                "response": (
-                    "The species you spotted is likely a Bengal Tiger "
-                    "(Panthera tigris tigris). It is classified as Endangered "
-                    "by the IUCN. Rangers should keep a safe distance of at "
-                    "least 100 metres and avoid direct eye contact."
-                ),
-            }
-        }
-    }
+
+# ── Layer 2 dispatch ──────────────────────────────────────────────────────────
+
+async def _dispatch_layer2(
+    query_type: QueryType,
+    request,
+    tool_results: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    try:
+        if query_type == QueryType.REPORT:
+            from agents.layer2.reporter import ReporterAgent
+            return await ReporterAgent().run(request, tool_results)
+
+        elif query_type == QueryType.EXPLORE:
+            from agents.layer2.explorer import ExplorerAgent
+            return await ExplorerAgent().run(request, tool_results)
+
+        elif query_type == QueryType.ENCYCLOPEDIA:
+            from agents.layer2.species_info import SpeciesInfoAgent
+            return await SpeciesInfoAgent().run(request, tool_results)
+
+    except Exception as exc:
+        logger.error("Layer 2 dispatch failed for %s: %s", query_type, exc, exc_info=True)
+
+    return None
 
 
 # ── Route ─────────────────────────────────────────────────────────────────────
 
-@router.post(
-    "/chat",
-    response_model=ChatResponse,
-    summary="Send a message to the Prahari orchestrator",
-    description=(
-        "Accepts a user message (with optional image URL and GPS coordinates), "
-        "runs it through the Receiver Agent to initialise / resume a session, "
-        "then invokes the Orchestrator Agent.  "
-        "Returns the AI response and the ``session_id`` for conversation continuity.\n\n"
-        "**Device headers** (for push notifications — React frontend):\n"
-        "- `X-Device-ID`: stable UUID from localStorage\n"
-        "- `X-FCM-Token`: Firebase Cloud Messaging web-push token"
-    ),
-)
+@router.post("/chat", response_model=ChatResponse)
 async def chat(payload: ReceiverInput, request: Request) -> ChatResponse:
     """
     Primary entry point for the Prahari agent system.
 
-    The FastAPI ``Request`` object is injected automatically by FastAPI
-    so that the Receiver can extract device metadata from headers.
-
-    - **user_id**: Unique identifier for the calling user / device.
-    - **session_id**: Resume an existing conversation. Omit to start fresh.
+    - **user_id**: unique user/device identifier
+    - **session_id**: resume an existing conversation (omit to start fresh)
     - **query_type**: ``report`` | ``explore`` | ``encyclopedia``
-    - **message**: The text message from the user.
-    - **image_url**: Optional public URL of an image to identify.
-    - **latitude** / **longitude**: Optional GPS coordinates.
+    - **message**: user's text message
+    - **image_url**: optional image URL
+    - **latitude** / **longitude**: optional GPS coordinates
     """
     try:
         agent_request = await run_receiver(payload, request)
-        response_text = await run_orchestrator(agent_request)
+        response_text, tool_results = await run_orchestrator(agent_request)
+
+        structured_data = await _dispatch_layer2(
+            payload.query_type, agent_request, tool_results
+        )
 
     except ValueError as exc:
-        logger.warning("Receiver/Orchestrator validation error: %s", exc)
+        logger.warning("Validation error: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
-        logger.error("Orchestrator runtime error: %s", exc)
+        logger.error("Orchestrator error: %s", exc)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("Unexpected error in /agent/chat: %s", exc)
@@ -107,4 +101,5 @@ async def chat(payload: ReceiverInput, request: Request) -> ChatResponse:
         user_id=payload.user_id,
         query_type=payload.query_type.value,
         response=response_text,
+        data=structured_data,
     )

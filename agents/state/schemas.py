@@ -16,7 +16,7 @@ All documents follow the Cosmos DB convention:
   - The partition key field matches ``id`` in every container
     (i.e., each container uses /id as its partition key path).
 
-TTL fields (``_ttl``) are set as integers (seconds) — you must enable
+TTL fields (``ttl``) are set as integers (seconds) — you must enable
 the DefaultTimeToLive policy on the Cosmos container for TTL to take effect.
 """
 
@@ -126,7 +126,7 @@ class ImageAnalysisCacheDoc(BaseModel):
     classifications: list[dict[str, Any]] = Field(default_factory=list)
     raw: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_utcnow)
-    ttl: int = Field(default=604_800, alias="_ttl")    # 7 days
+    ttl: int = Field(default=604_800, alias="ttl")    # 7 days
 
     model_config = {"populate_by_name": True}
 
@@ -160,7 +160,7 @@ class SpeciesContextCacheDoc(BaseModel):
     traits: dict[str, Any] = Field(default_factory=dict)   # LLM-extracted trait dict
     iucn_category: Optional[str] = None
     created_at: datetime = Field(default_factory=_utcnow)
-    ttl: int = Field(default=86_400, alias="_ttl")          # 24 hours
+    ttl: int = Field(default=86_400, alias="ttl")          # 24 hours
 
     model_config = {"populate_by_name": True}
 
@@ -193,7 +193,7 @@ class LocationCacheDoc(BaseModel):
     forest_zone: Optional[str] = None
     protected_area: Optional[str] = None
     created_at: datetime = Field(default_factory=_utcnow)
-    ttl: int = Field(default=2_592_000, alias="_ttl")       # 30 days
+    ttl: int = Field(default=2_592_000, alias="ttl")       # 30 days
 
     model_config = {"populate_by_name": True}
 

@@ -31,8 +31,8 @@ class Layer0Settings(BaseSettings):
 
     azure_openai_endpoint: str = ""
     azure_openai_api_key: str = ""
-    azure_openai_deployment: str = "gpt-4o-mini"
-    azure_openai_api_version: str = "2024-08-01-preview"
+    azure_openai_deployment: str = "gpt-5-mini"
+    azure_openai_api_version: str = "2024-10-21"
 
 
 @lru_cache(maxsize=1)

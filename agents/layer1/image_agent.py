@@ -7,7 +7,7 @@ Single entry point that orchestrates:
   1. Cosmos DB cache check (TTL 7 days)
   2. SpeciesNet prediction (via injected model)
   3. Relevancy check (detection-based)
-  4. Species identification (SpeciesNet label or GPT-4o-mini vision)
+  4. Species identification (SpeciesNet label or GPT-5-mini vision)
   5. Cache write
 
 Public API
@@ -26,8 +26,6 @@ import asyncio
 import hashlib
 import logging
 from typing import Optional, TYPE_CHECKING
-
-from langchain_openai import AzureChatOpenAI
 
 from agents.layer0.config import get_settings
 from agents.layer1.identifier import identify_species
@@ -73,13 +71,14 @@ async def _read_cache(image_url: str) -> Optional[ImageAnalysisResult]:
     """Return cached ImageAnalysisResult if it exists, else None."""
     doc_id = _cache_key(image_url)
     try:
-        container = await get_state_container(StateContainers.IMAGE_CACHE)
+        container = await get_state_container(StateContainers.IMAGE_ANALYSIS_CACHE)
         doc = await container.read_item(item=doc_id, partition_key=doc_id)
         result = ImageAnalysisResult.model_validate(doc.get("result", {}))
         result.cached = True
         logger.info("Cache HIT for image: key=%s", doc_id)
         return result
-    except Exception:
+    except Exception as exc:
+        logger.debug("Cache MISS for image: key=%s reason=%s", doc_id, exc)
         return None
 
 
@@ -90,31 +89,21 @@ async def _write_cache(image_url: str, result: ImageAnalysisResult, ttl_seconds:
         "id": doc_id,
         "image_url": image_url,
         "result": result.model_dump(mode="json"),
-        "_ttl": ttl_seconds,
+        "ttl": ttl_seconds,
     }
     try:
-        container = await get_state_container(StateContainers.IMAGE_CACHE)
+        container = await get_state_container(StateContainers.IMAGE_ANALYSIS_CACHE)
         await container.upsert_item(body=doc)
-        logger.debug("Cache WRITE: key=%s ttl=%ds", doc_id, ttl_seconds)
+        logger.info("Cache WRITE OK: key=%s ttl=%ds", doc_id, ttl_seconds)
     except Exception as exc:
         # Cache write failure is non-fatal — log and continue
-        logger.warning("Cache write failed for %s: %s", doc_id, exc)
+        logger.warning("Cache write failed for %s: %s", doc_id, exc, exc_info=True)
 
 
 # ── Agent ─────────────────────────────────────────────────────────────────────
 
 class ImageAnalysisAgent:
-    """
-    Orchestrates the full Layer 1 image analysis pipeline.
-
-    Parameters
-    ----------
-    llm:
-        Shared AzureChatOpenAI instance for GPT-4o-mini vision fallback.
-    """
-
-    def __init__(self, llm: AzureChatOpenAI) -> None:
-        self._llm = llm
+    """Orchestrates the full Layer 1 image analysis pipeline."""
 
     async def run(
         self,
@@ -151,6 +140,32 @@ class ImageAnalysisAgent:
         )
 
         predictions = (raw or {}).get("predictions") or []
+        logger.info(
+            "[SpeciesNet] raw output: predictions_count=%d raw_keys=%s",
+            len(predictions),
+            list((raw or {}).keys()),
+        )
+        if predictions:
+            pred0 = predictions[0]
+            detections = pred0.get("detections") or []
+            classifications = pred0.get("classifications") or {}
+            classes = classifications.get("classes") or []
+            scores = classifications.get("scores") or []
+            logger.info(
+                "[SpeciesNet] prediction[0]: detections=%d top_detection=%s "
+                "classifications_count=%d top_label=%r top_score=%s",
+                len(detections),
+                detections[0] if detections else None,
+                len(classes),
+                classes[0] if classes else None,
+                f"{scores[0]:.4f}" if scores else None,
+            )
+            if len(classes) > 1:
+                logger.debug(
+                    "[SpeciesNet] top-3 labels: %s",
+                    list(zip(classes[:3], [f"{s:.4f}" for s in scores[:3]])),
+                )
+
         if not predictions:
             result = ImageAnalysisResult(
                 is_relevant=False,
@@ -182,7 +197,7 @@ class ImageAnalysisAgent:
             return result
 
         # ── 4. Species identification ──────────────────────────────────────────
-        identification = await identify_species(prediction, image_url, self._llm)
+        identification = await identify_species(prediction, image_url)
         logger.info(
             "Identification: species=%r confidence=%.2f source=%s",
             identification.scientific_name,
@@ -219,13 +234,5 @@ def get_image_agent() -> ImageAnalysisAgent:
     """Return a singleton ImageAnalysisAgent, constructing it on first call."""
     global _agent_instance  # noqa: PLW0603
     if _agent_instance is None:
-        s = get_settings()
-        llm = AzureChatOpenAI(
-            azure_endpoint=s.azure_openai_endpoint,
-            api_key=s.azure_openai_api_key,         # type: ignore[arg-type]
-            azure_deployment=s.azure_openai_deployment,
-            api_version=s.azure_openai_api_version,
-            max_tokens=256,
-        )
-        _agent_instance = ImageAnalysisAgent(llm=llm)
+        _agent_instance = ImageAnalysisAgent()
     return _agent_instance

@@ -38,81 +38,38 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# ── Schema ────────────────────────────────────────────────────────────────────
+# ── Schema ───────────────────────────────────────────────────────────────────
 
-from pydantic import BaseModel, Field
-
-
-class AnimalTraits(BaseModel):
-    """Traits of the animal extracted from the user's text."""
-    size: Optional[str] = None          # "large", "small", "cub-sized"
-    colour: Optional[str] = None         # "tawny with black spots"
-    behaviour: Optional[str] = None      # "aggressive", "feeding", "resting"
-    movement: Optional[str] = None       # "charging", "stationary", "fleeing"
-    distinctive_features: list[str] = Field(default_factory=list)  # ["mane", "stripes", "trunk"]
-    count: Optional[str] = None         # "single animal", "pair", "herd of ~20"
-    additional: Optional[str] = None    # any other relevant details
+from pydantic import BaseModel
 
 
 class TextAnalysisResult(BaseModel):
-    """Complete output of the TextAnalysisAgent."""
-    # (a) Traits
-    traits: AnimalTraits
-
-    # (b) Severity
-    severity: SeverityLevel
-    severity_reason: str   # one-sentence explanation of the severity classification
-
-    # (c) Species identification from text
-    scientific_name: Optional[str] = None     # e.g. "Panthera tigris" — None if unidentified
-    common_name: Optional[str] = None         # e.g. "Bengal Tiger"
-    identification_confidence: str = "low"   # "high" | "medium" | "low"
-    identification_note: str = ""            # brief reason for the identification or failure
+    """Simplified output of the TextAnalysisAgent — 5 fields only."""
+    size:                    Optional[str] = None   # e.g. "large", "cub-sized", null
+    severity:                SeverityLevel          # critical | high | medium | low | informational
+    scientific_name:         Optional[str] = None   # e.g. "Panthera tigris" or null
+    common_name:             Optional[str] = None   # e.g. "Bengal Tiger" or null
+    identification_confidence: int = 0              # 0–100 percent
 
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 
 _SYSTEM_PROMPT = """\
-You are an expert wildlife analyst for Prahari — a wildlife sighting and safety system in India.
+You are a wildlife analyst for Prahari (India). Analyse the user's wildlife message.
+Return ONLY this JSON object — no extra text:
 
-A user has sent a text message about a wildlife encounter or sighting. Your task is to analyse
-the message and return a single JSON object with three sections.
-
-━━━━━━━━━━━━━━━━━━━━━━━ OUTPUT FORMAT (strict JSON) ━━━━━━━━━━━━━━━━━━━━━━━
 {
-  "traits": {
-    "size": "<string or null — e.g. 'large', 'cub-sized', 'enormous'>",
-    "colour": "<string or null — e.g. 'tawny with black rosettes'>",
-    "behaviour": "<string or null — e.g. 'aggressive', 'feeding on prey', 'resting'>",
-    "movement": "<string or null — e.g. 'charging', 'stationary', 'swimming'>",
-    "distinctive_features": ["<feature1>", "<feature2>"],
-    "count": "<string or null — e.g. 'single animal', 'pair', 'herd of ~15'>",
-    "additional": "<string or null — any other relevant details>"
-  },
-  "severity": "<exactly one of: critical | high | medium | low | informational>",
-  "severity_reason": "<one sentence explaining why this severity was chosen>",
-  "scientific_name": "<Genus species, e.g. 'Panthera tigris', or null if cannot identify>",
-  "common_name": "<English common name, or null>",
-  "identification_confidence": "<exactly one of: high | medium | low>",
-  "identification_note": "<one sentence — reason for identification or why it was not possible>"
+  "size": "<animal size in one word: tiny|small|medium|large|massive — or null>",
+  "severity": "<critical|high|medium|low|informational>",
+  "scientific_name": "<Genus species — or null if unsure>",
+  "common_name": "<English name — or null>",
+  "identification_confidence": <integer 0-100>
 }
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-SEVERITY GUIDE:
-  critical     – User or others in immediate danger right now
-  high         – Active threat nearby, could escalate quickly
-  medium       – Notable sighting, no immediate danger
-  low          – Indirect observation, distant sighting, low concern
-  informational – General question or no wildlife interaction
-
-SPECIES IDENTIFICATION RULES:
-  - Use only information from the text — do NOT assume species from location alone.
-  - If the user describes enough traits (e.g. "orange with black stripes"), give your best guess.
-  - If the description is too vague (e.g. "I saw a bird"), set scientific_name to null.
-  - NEVER hallucinate a species. Prefer null over an incorrect identification.
-  - identification_confidence: "high" only if you are very certain.
-
-Return ONLY the JSON object. No preamble, no explanation, no markdown fences.\
+Severity: critical=immediate danger, high=active threat, medium=notable sighting,
+          low=distant/calm sighting, informational=no wildlife interaction.
+Species: use text clues only. Null if description is too vague. Never hallucinate.
+Confidence: 90-100 only if certain, 50-89 if reasonable guess, 0-49 if vague.\
 """
 
 
@@ -142,7 +99,7 @@ class TextAnalysisAgent:
         -------
         TextAnalysisResult
         """
-        logger.info("TextAnalysisAgent.run: message_len=%d", len(message))
+        logger.info("[analyse_text] START: message_len=%d", len(message))
 
         messages = [
             SystemMessage(content=_SYSTEM_PROMPT),
@@ -151,7 +108,23 @@ class TextAnalysisAgent:
 
         try:
             response = await self._llm.ainvoke(messages)
-            raw = response.content.strip()
+            raw = (response.content or "").strip()
+
+            finish_reason = (
+                (response.response_metadata or {}).get("finish_reason")
+                or (response.response_metadata or {}).get("stop_reason")
+                or "unknown"
+            )
+            logger.info(
+                "[analyse_text] LLM finish_reason=%r raw_len=%d preview=%.200s",
+                finish_reason, len(raw), raw or "<EMPTY>",
+            )
+
+            if not raw:
+                raise ValueError(
+                    f"LLM returned empty response — finish_reason={finish_reason!r}. "
+                    "Check Azure content filter or deployment config."
+                )
 
             # Strip markdown code fences if present
             if raw.startswith("```"):
@@ -162,52 +135,47 @@ class TextAnalysisAgent:
 
             data: dict = json.loads(raw)
 
-            traits = AnimalTraits(
-                size=data.get("traits", {}).get("size"),
-                colour=data.get("traits", {}).get("colour"),
-                behaviour=data.get("traits", {}).get("behaviour"),
-                movement=data.get("traits", {}).get("movement"),
-                distinctive_features=data.get("traits", {}).get("distinctive_features") or [],
-                count=data.get("traits", {}).get("count"),
-                additional=data.get("traits", {}).get("additional"),
-            )
-
             severity_raw = (data.get("severity") or "low").lower()
             try:
                 severity = SeverityLevel(severity_raw)
             except ValueError:
+                logger.warning("[analyse_text] Unknown severity %r — defaulting to LOW", severity_raw)
                 severity = SeverityLevel.LOW
 
-            # scientific_name: null in JSON → None → "UNIDENTIFIED" string for LLM readability
-            sci_name = data.get("scientific_name") or None
+            # identification_confidence: accept int or string ("high"→85, "medium"→50, "low"→20)
+            raw_conf = data.get("identification_confidence", 0)
+            if isinstance(raw_conf, int):
+                confidence_int = max(0, min(100, raw_conf))
+            elif isinstance(raw_conf, float):
+                confidence_int = max(0, min(100, int(raw_conf)))
+            elif isinstance(raw_conf, str):
+                confidence_int = {"high": 85, "medium": 50, "low": 20}.get(raw_conf.lower(), 0)
+            else:
+                confidence_int = 0
 
             result = TextAnalysisResult(
-                traits=traits,
+                size=data.get("size") or None,
                 severity=severity,
-                severity_reason=data.get("severity_reason", ""),
-                scientific_name=sci_name,
+                scientific_name=data.get("scientific_name") or None,
                 common_name=data.get("common_name") or None,
-                identification_confidence=data.get("identification_confidence", "low"),
-                identification_note=data.get("identification_note", ""),
+                identification_confidence=confidence_int,
             )
 
             logger.info(
-                "Text analysis: severity=%s species=%s confidence=%s",
-                result.severity,
+                "[analyse_text] DONE: severity=%s species=%s confidence=%d%%",
+                result.severity.value,
                 result.scientific_name or "UNIDENTIFIED",
                 result.identification_confidence,
             )
             return result
 
         except Exception as exc:
-            logger.error("TextAnalysisAgent failed: %s", exc)
-            # Return a safe fallback result
+            logger.error("[analyse_text] FAILED: %s | raw=%r", exc, locals().get("raw", "<not set>"))
             return TextAnalysisResult(
-                traits=AnimalTraits(),
+                size=None,
                 severity=SeverityLevel.LOW,
-                severity_reason="Analysis failed — defaulting to LOW severity.",
                 scientific_name=None,
-                identification_note=f"Analysis error: {exc}",
+                identification_confidence=0,
             )
 
 
@@ -226,7 +194,11 @@ def get_text_agent() -> TextAnalysisAgent:
             api_key=s.azure_openai_api_key,         # type: ignore[arg-type]
             azure_deployment=s.azure_openai_deployment,
             api_version=s.azure_openai_api_version,
-            max_tokens=512,
+            max_tokens=1024,
+            # temperature=0 not supported by GPT-5-mini (only default=1 allowed)
+            model_kwargs={
+                "response_format": {"type": "json_object"},
+            },
         )
         _text_agent_instance = TextAnalysisAgent(llm=llm)
     return _text_agent_instance

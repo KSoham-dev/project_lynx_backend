@@ -66,7 +66,7 @@ class ReceiverInput(BaseModel):
             "'explore' (area exploration), 'encyclopedia' (species facts)."
         ),
     )
-    message: str = Field(..., description="The user's text message / query.")
+    message: Optional[str] = Field(default=None, description="The user's text message / query.")
     image_url: Optional[str] = Field(
         default=None, description="Public URL of an image attached to this turn."
     )
@@ -133,7 +133,7 @@ class AgentRequest(BaseModel):
     user_id: str
     session_id: str
     query_type: QueryType
-    message: str
+    message: Optional[str] = None
     image_url: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None

@@ -102,6 +102,27 @@ async def update_report_status(report_id: str, user_id: str, status: ReportStatu
     await container.upsert_item(body=doc.to_cosmos())
 
 
+async def upsert_report(report_dict: dict) -> None:
+    """
+    Upsert a raw report dict into Cosmos prahari-data/reports.
+    Used by Layer 2 ReporterAgent.
+    Stamps created_at / updated_at and default status if not already present.
+    """
+    now_iso = _utcnow().isoformat()
+    report_dict.setdefault("created_at", now_iso)
+    report_dict["updated_at"] = now_iso
+    report_dict.setdefault("status", ReportStatus.SUBMITTED.value)
+
+    container = await get_data_container(DataContainers.REPORTS)
+    await container.upsert_item(body=report_dict)
+    logger.info(
+        "Report upserted: id=%s user=%s species=%s",
+        report_dict.get("id"),
+        report_dict.get("user_id"),
+        report_dict.get("scientific_name"),
+    )
+
+
 # ── explorations ──────────────────────────────────────────────────────────────
 
 async def create_exploration(

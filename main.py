@@ -17,6 +17,20 @@ from agents.layer1.image_agent import set_speciesnet_model
 model = None
 MODEL_PATH = os.getenv("MODEL_PATH", "./model")
 
+import logging
+logging.basicConfig(level=logging.INFO)
+
+# Silence noisy SDK loggers — only show WARNING+ from these
+for _noisy in (
+    "azure.cosmos",
+    "azure.core",
+    "azure.cosmos._cosmos_http_logging_policy",
+    "httpx",
+    "httpcore",
+    "urllib3",
+):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -265,4 +279,4 @@ def species_traits(
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

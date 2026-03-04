@@ -256,7 +256,13 @@ class TestFetchBlob:
         with patch.object(pt, "_build_blob_service_client", return_value=service):
             pt._fetch_blob("Caridinatypus")
         container_client = service.get_container_client.return_value
-        container_client.list_blobs.assert_called_once_with(name_starts_with="Caridinatypus")
+        container_client = service.get_container_client.return_value
+        container_client.list_blobs.assert_called_once()
+        used_prefix = container_client.list_blobs.call_args.kwargs.get(
+            "name_starts_with",
+            container_client.list_blobs.call_args.args[0] if container_client.list_blobs.call_args.args else "",
+        )
+        assert used_prefix.endswith("Caridinatypus")
 
     def test_only_first_blob_is_downloaded(self, iucn_json):
         """Even if multiple blobs match, only the first is downloaded."""

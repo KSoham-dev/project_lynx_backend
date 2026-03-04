@@ -28,8 +28,7 @@ from agents.layer1.gpt_vision import gpt_identify
 from agents.layer1.schemas import IdentificationResult
 from agents.layer1.species_list import PRIORITY_GENERA
 
-if TYPE_CHECKING:
-    from langchain_openai import AzureChatOpenAI
+
 
 logger = logging.getLogger(__name__)
 
@@ -45,32 +44,39 @@ _NON_SPECIES_TOKENS: frozenset[str] = frozenset({
 
 # ── Taxonomy label parser ─────────────────────────────────────────────────────
 
-def _parse_taxonomy(label: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
+def _parse_taxonomy(label: str) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
     """
-    Extract (family, genus, scientific_name) from a SpeciesNet taxonomy label.
+    Extract (family, genus, scientific_name, common_name) from a SpeciesNet taxonomy label.
 
-    SpeciesNet label format (semicolon-separated, kingdom → species epithet):
-        "animalia;chordata;mammalia;carnivora;felidae;panthera;leo"
-        → family="FELIDAE", genus="Panthera", scientific_name="Panthera leo"
+    SpeciesNet label format (semicolon-separated):
+        "uuid;class;order;family;genus;species_epithet;common_name"
+        e.g. "aa73e0ac-...;mammalia;carnivora;felidae;panthera;pardus;leopard"
+        → family="FELIDAE", genus="Panthera", scientific_name="Panthera pardus",
+          common_name="leopard"
 
-    Returns (None, None, None) when:
-      - Fewer than 2 parts exist (can't get genus + epithet)
+    The last part is always the common name, second-to-last is the species
+    epithet, and third-to-last is the genus.
+
+    Returns (None, None, None, None) when:
+      - Fewer than 3 parts exist (can't get genus + epithet + common_name)
       - Epithet or genus is a known non-species token
     """
     parts = [p.strip() for p in label.split(";") if p.strip()]
-    if len(parts) < 2:
-        return None, None, None
+    if len(parts) < 3:
+        return None, None, None, None
 
-    raw_genus   = parts[-2].lower()
-    raw_epithet = parts[-1].lower()
-    raw_family  = parts[-3].upper() if len(parts) >= 3 else None
+    raw_common_name = parts[-1].lower()
+    raw_epithet     = parts[-2].lower()
+    raw_genus       = parts[-3].lower()
+    raw_family      = parts[-4].upper() if len(parts) >= 4 else None
 
     if raw_epithet in _NON_SPECIES_TOKENS or raw_genus in _NON_SPECIES_TOKENS:
-        return raw_family, None, None   # family may still be parseable
+        return raw_family, None, None, None   # family may still be parseable
 
     genus           = raw_genus.capitalize()
     scientific_name = f"{genus} {raw_epithet}"
-    return raw_family, genus, scientific_name
+    common_name     = raw_common_name if raw_common_name not in _NON_SPECIES_TOKENS else None
+    return raw_family, genus, scientific_name, common_name
 
 
 # ── GPT routing decision ──────────────────────────────────────────────────────
@@ -112,7 +118,7 @@ def _should_use_gpt(
 
     # Condition 2 — priority genus in ANY of top-3 labels
     for candidate_label in all_labels[:3]:
-        _, candidate_genus, _ = _parse_taxonomy(candidate_label)
+        _, candidate_genus, _, _ = _parse_taxonomy(candidate_label)
         if candidate_genus and candidate_genus in PRIORITY_GENERA:
             return True, (
                 f"Genus '{candidate_genus}' found in top-3 predictions "
@@ -127,7 +133,6 @@ def _should_use_gpt(
 async def identify_species(
     prediction: dict,
     image_url: str,
-    llm: "AzureChatOpenAI",
 ) -> IdentificationResult:
     """
     Two-stage species identifier.
@@ -137,9 +142,7 @@ async def identify_species(
     prediction:
         Single prediction entry from SpeciesNet output dict.
     image_url:
-        Original image URL — passed to GPT vision if fallback is needed.
-    llm:
-        Shared AzureChatOpenAI instance (gpt-4o-mini, supports vision).
+        Original image URL — passed to GPT-5-mini vision if fallback is needed.
 
     Returns
     -------
@@ -152,7 +155,7 @@ async def identify_species(
     top_label = classes[0] if classes else None
     top_score = float(scores[0]) if scores else 0.0
 
-    family, genus, scientific_name = _parse_taxonomy(top_label or "")
+    family, genus, scientific_name, model_common_name = _parse_taxonomy(top_label or "")
 
     use_gpt, reason = _should_use_gpt(
         top_label=top_label,
@@ -169,7 +172,7 @@ async def identify_species(
     )
 
     if use_gpt:
-        return await gpt_identify(image_url, llm)
+        return await gpt_identify(image_url)
 
     return IdentificationResult(
         scientific_name=scientific_name,   # type: ignore[arg-type]
@@ -178,4 +181,5 @@ async def identify_species(
         top_label_raw=top_label,
         family=family,
         genus=genus,
+        common_name=model_common_name,
     )

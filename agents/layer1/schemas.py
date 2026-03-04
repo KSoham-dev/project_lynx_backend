@@ -25,6 +25,7 @@ class IdentificationResult(BaseModel):
     top_label_raw: Optional[str] = None   # raw SpeciesNet taxonomy label
     family: Optional[str] = None          # e.g. "FELIDAE"
     genus: Optional[str] = None           # e.g. "Panthera"
+    common_name: Optional[str] = None     # e.g. "leopard" (from SpeciesNet label)
 
 
 class ImageAnalysisResult(BaseModel):
