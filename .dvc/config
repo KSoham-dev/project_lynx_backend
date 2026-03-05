@@ -1,4 +1,0 @@
-[core]
-    remote = az_remote
-['remote "az_remote"']
-    url = azure://iucn-scrape-data/speciesnet_model
