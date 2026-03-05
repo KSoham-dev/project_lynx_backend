@@ -1,0 +1,44 @@
+name: Trigger auto deployment for prahari-ai-dev
+
+on:
+  push:
+    branches: 
+      [ dev ]
+    paths:
+    - '**'
+    - '.github/workflows/prahari-ai-dev-AutoDeployTrigger-e36fd67d-7549-41a7-8923-748582fb4b75.yml'
+
+  workflow_dispatch:
+      
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout to the branch
+        uses: actions/checkout@v2
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.PRAHARIAIDEV_AZURE_CREDENTIALS }}
+
+      - name: Pull model from DVC and extract
+        run: |
+          pip install dvc[azure]
+          dvc pull
+          mkdir -p model
+          tar -xzvf speciesnet-pytorch-v4.0.2b-v1.tar.gz -C model
+        env:
+          AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+
+      - name: Build and push container image to registry
+        uses: azure/container-apps-deploy-action@v2
+        with:
+          appSourcePath: ${{ github.workspace }}
+          registryUrl: ca157bb2d22eacr.azurecr.io
+          registryUsername: ${{ secrets.PRAHARIAIDEV_REGISTRY_USERNAME }}
+          registryPassword: ${{ secrets.PRAHARIAIDEV_REGISTRY_PASSWORD }}
+          containerAppName: prahari-ai-dev
+          resourceGroup: prahari-ai-fastapi-rg
+          imageToBuild: ca157bb2d22eacr.azurecr.io/prahari-ai-dev:${{ github.sha }}
