@@ -9,10 +9,27 @@ import os
 import uvicorn
 
 from pipeline.species_traits import run_pipeline
+from agents.layer0.router import router as agent_router
+from agents.state.cosmos_client import close_cosmos_clients
+from agents.layer1.image_agent import set_speciesnet_model
 
 # ── Model globals ──────────────────────────────────────────────────────────────
 model = None
 MODEL_PATH = os.getenv("MODEL_PATH", "./model")
+
+import logging
+logging.basicConfig(level=logging.INFO)
+
+# Silence noisy SDK loggers — only show WARNING+ from these
+for _noisy in (
+    "azure.cosmos",
+    "azure.core",
+    "azure.cosmos._cosmos_http_logging_policy",
+    "httpx",
+    "httpcore",
+    "urllib3",
+):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 
 @asynccontextmanager
@@ -25,11 +42,14 @@ async def lifespan(app: FastAPI):
     try:
         model = SpeciesNet(MODEL_PATH)
         print("SpeciesNet model loaded successfully.")
+        set_speciesnet_model(model)         # inject into Layer 1 image agent
+        print("Layer 1 ImageAnalysisAgent ready.")
     except Exception as exc:
         print(f"Failed to load SpeciesNet model: {exc}")
         raise RuntimeError(f"Model load failed: {exc}") from exc
     yield
-    # Cleanup (if any) goes here
+    # Cleanup: close Cosmos DB connection pools
+    await close_cosmos_clients()
     model = None
 
 
@@ -39,6 +59,9 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+# ── Agent router (Layer 0: Orchestrator + Context/State) ───────────────────────
+app.include_router(agent_router)
 
 
 # ── Request / Response schemas ─────────────────────────────────────────────────
@@ -256,4 +279,4 @@ def species_traits(
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
