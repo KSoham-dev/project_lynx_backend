@@ -207,9 +207,11 @@ cachetools>=5.3.0
 
 # ── Agents / LangChain (Layer 0) ─────────────────────────────────────────────
 langchain>=0.3.0
+langchain-core>=0.3.0
 langchain-openai>=0.3.0
 langchain-community>=0.3.0
 openai>=1.30.0
+pygeodesy==26.2.26
 azure-cosmos>=4.7.0
 pydantic-settings>=2.0.0
 

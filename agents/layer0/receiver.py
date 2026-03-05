@@ -78,7 +78,7 @@ class ReceiverInput(BaseModel):
             "example": {
                 "user_id": "ranger-42",
                 "query_type": "report",
-                "message": "I spotted a leopard near Ranthambore — is it dangerous?",
+                "image_url": "https://inaturalist-open-data.s3.amazonaws.com/photos/605060662/large.jpg",
                 "latitude": 26.01,
                 "longitude": 76.50,
             }

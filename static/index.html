@@ -1,0 +1,1635 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Species API Test Bench</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:           #0d0f14;
+      --surface:      #13151c;
+      --surface2:     #1a1d27;
+      --surface3:     #21253a;
+      --border:       #252836;
+      --accent:       #6366f1;
+      --accent-dim:   rgba(99,102,241,0.12);
+      --accent-ring:  rgba(99,102,241,0.25);
+      --text:         #e2e8f0;
+      --text-dim:     #94a3b8;
+      --text-muted:   #4b5563;
+      --green:        #10b981;
+      --red:          #ef4444;
+      --amber:        #f59e0b;
+      --blue:         #38bdf8;
+      --purple:       #a78bfa;
+      --orange:       #fb923c;
+      --teal:         #2dd4bf;
+      --sidebar-w:    252px;
+      --header-h:     54px;
+      --radius:       10px;
+    }
+
+    html, body { height: 100%; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', sans-serif;
+      font-size: 13.5px;
+      line-height: 1.55;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ─── Scrollbar ───────────────────────────────────────────────────────── */
+    ::-webkit-scrollbar            { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track      { background: transparent; }
+    ::-webkit-scrollbar-thumb      { background: var(--border); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover{ background: #3a3f52; }
+
+    /* ─── Header ──────────────────────────────────────────────────────────── */
+    header {
+      height: var(--header-h);
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 20px;
+      gap: 12px;
+      flex-shrink: 0;
+      position: relative;
+      z-index: 50;
+    }
+
+    .logo {
+      width: 30px; height: 30px;
+      background: linear-gradient(135deg, #6366f1 0%, #818cf8 100%);
+      border-radius: 9px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 15px;
+      box-shadow: 0 0 14px rgba(99,102,241,0.4);
+      flex-shrink: 0;
+    }
+
+    header h1 {
+      font-size: 14.5px;
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: -0.015em;
+    }
+
+    .header-badge {
+      font-size: 10.5px;
+      background: var(--accent-dim);
+      color: #a5b4fc;
+      border: 1px solid var(--accent-ring);
+      padding: 2px 9px;
+      border-radius: 20px;
+      font-weight: 500;
+      letter-spacing: 0.01em;
+    }
+
+    .header-sep { flex: 1; }
+
+    .server-status {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 11.5px;
+      color: var(--text-dim);
+    }
+
+    .server-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 5px var(--green);
+    }
+
+    /* ─── Layout ──────────────────────────────────────────────────────────── */
+    .layout {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ─── Sidebar ─────────────────────────────────────────────────────────── */
+    .sidebar {
+      width: var(--sidebar-w);
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      overflow-y: auto;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .sidebar-search {
+      padding: 12px 12px 8px;
+      position: sticky;
+      top: 0;
+      background: var(--surface);
+      z-index: 10;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .sidebar-search input {
+      width: 100%;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      color: var(--text);
+      font-family: 'Inter', sans-serif;
+      font-size: 12.5px;
+      padding: 7px 10px 7px 30px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    .sidebar-search input:focus { border-color: var(--accent); }
+
+    .search-icon {
+      position: absolute;
+      left: 22px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-muted);
+      pointer-events: none;
+    }
+
+    .sidebar-search { position: relative; }
+    .sidebar-search .search-icon { top: calc(50% + 4px); }
+
+    .group-header {
+      padding: 16px 14px 5px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .group-icon {
+      width: 18px; height: 18px;
+      border-radius: 5px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px;
+      flex-shrink: 0;
+    }
+
+    .group-icon.iucn    { background: rgba(99,102,241,.18); color: #a5b4fc; }
+    .group-icon.traits  { background: rgba(16,185,129,.15); color: #6ee7b7; }
+    .group-icon.reporter{ background: rgba(251,146,60,.15);  color: #fbbf24; }
+    .group-icon.pipeline{ background: rgba(14,165,233,.15); color: #7dd3fc; }
+
+    .group-label-text {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+    }
+
+    .fn-count {
+      font-size: 10px;
+      background: var(--surface2);
+      color: var(--text-muted);
+      padding: 1px 6px;
+      border-radius: 10px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .fn-item {
+      padding: 7px 14px 7px 16px;
+      cursor: pointer;
+      color: var(--text-dim);
+      font-size: 12.5px;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 400;
+      transition: background 0.12s, color 0.12s;
+      border-left: 2px solid transparent;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      user-select: none;
+    }
+
+    .fn-item:hover  { background: var(--surface2); color: var(--text); }
+
+    .fn-item.active {
+      background: var(--accent-dim);
+      color: #a5b4fc;
+      border-left-color: var(--accent);
+    }
+
+    .fn-item .method-pill {
+      font-size: 9px;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 4px;
+      letter-spacing: 0.04em;
+      flex-shrink: 0;
+    }
+
+    .pill-get  { background: rgba(16,185,129,.15); color: #6ee7b7; }
+    .pill-post { background: rgba(251,146,60,.15);  color: #fbbf24; }
+
+    .fn-item.hidden { display: none; }
+
+    /* ─── Main ────────────────────────────────────────────────────────────── */
+    .main {
+      flex: 1;
+      overflow-y: auto;
+      padding: 28px 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+    }
+
+    /* ─── Empty state ─────────────────────────────────────────────────────── */
+    .empty-state {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      color: var(--text-muted);
+      text-align: center;
+      padding: 48px 32px;
+      margin: auto;
+    }
+
+    .empty-graphic {
+      width: 64px; height: 64px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 28px;
+      margin-bottom: 4px;
+    }
+
+    .empty-state h2 {
+      font-size: 16px; font-weight: 600;
+      color: var(--text-dim);
+    }
+
+    .empty-state p { font-size: 13px; max-width: 300px; line-height: 1.6; }
+
+    .empty-hints {
+      display: flex; gap: 8px; flex-wrap: wrap; justify-content: center;
+      margin-top: 6px;
+    }
+
+    .empty-hint {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 5px 11px;
+      font-size: 11.5px;
+      color: var(--text-dim);
+      font-family: 'JetBrains Mono', monospace;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .empty-hint:hover {
+      border-color: var(--accent);
+      color: #a5b4fc;
+      background: var(--accent-dim);
+    }
+
+    /* ─── Function view ────────────────────────────────────────────────────── */
+    #fn-view { display: none; flex-direction: column; gap: 20px; }
+
+    .fn-title-row {
+      display: flex; align-items: flex-start; gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .fn-name {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 20px;
+      font-weight: 500;
+      color: var(--text);
+      letter-spacing: -0.02em;
+    }
+
+    .fn-name .paren { color: var(--text-muted); }
+
+    .mod-tag {
+      font-size: 11px; font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 20px;
+      letter-spacing: 0.02em;
+      margin-top: 4px;
+      flex-shrink: 0;
+    }
+
+    .mod-iucn     { background: rgba(99,102,241,.14); color: #a5b4fc; border: 1px solid rgba(99,102,241,.25); }
+    .mod-traits   { background: rgba(16,185,129,.12); color: #6ee7b7; border: 1px solid rgba(16,185,129,.22); }
+    .mod-reporter { background: rgba(251,146,60,.13);  color: #fbbf24; border: 1px solid rgba(251,146,60,.25); }
+    .mod-pipeline { background: rgba(14,165,233,.12); color: #7dd3fc; border: 1px solid rgba(14,165,233,.22); }
+
+    .fn-desc {
+      color: var(--text-dim);
+      font-size: 13px;
+      line-height: 1.6;
+      max-width: 680px;
+    }
+
+    /* ─── Cards ────────────────────────────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .card-header {
+      padding: 11px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 7px;
+      font-size: 11px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.07em;
+      color: var(--text-muted);
+    }
+
+    .card-header svg { flex-shrink: 0; }
+
+    /* ─── Form ─────────────────────────────────────────────────────────────── */
+    .form-body {
+      padding: 18px;
+      display: flex; flex-direction: column; gap: 16px;
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 14px;
+    }
+
+    .form-group { display: flex; flex-direction: column; gap: 6px; }
+
+    .form-label {
+      font-size: 12px; font-weight: 500;
+      color: var(--text-dim);
+      display: flex; align-items: center; gap: 6px;
+    }
+
+    .req  { color: var(--red); font-size: 10px; }
+    .type { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--text-muted); background: var(--surface2); padding: 1px 5px; border-radius: 4px; }
+
+    input[type="text"],
+    input[type="number"],
+    textarea {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12.5px;
+      padding: 9px 12px;
+      outline: none;
+      width: 100%;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+
+    input[type="text"]:focus,
+    input[type="number"]:focus,
+    textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-dim);
+    }
+
+    textarea { min-height: 130px; resize: vertical; line-height: 1.6; }
+    input[type="number"] { max-width: 140px; }
+
+    /* ─── Actions ─────────────────────────────────────────────────────────── */
+    .actions {
+      display: flex; align-items: center; gap: 10px;
+    }
+
+    .run-btn {
+      display: flex; align-items: center; gap: 8px;
+      background: var(--accent);
+      color: #fff;
+      border: none; border-radius: 8px;
+      padding: 10px 22px;
+      font-size: 13.5px; font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
+      box-shadow: 0 2px 12px rgba(99,102,241,0.35);
+    }
+
+    .run-btn:hover   { background: #818cf8; box-shadow: 0 4px 18px rgba(99,102,241,0.45); transform: translateY(-1px); }
+    .run-btn:active  { transform: translateY(0); box-shadow: 0 1px 6px rgba(99,102,241,0.3); }
+    .run-btn:disabled{ opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
+
+    .spinner {
+      width: 13px; height: 13px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.55s linear infinite;
+      display: none;
+    }
+
+    .run-btn.loading .spinner { display: block; }
+    .run-btn.loading .run-text { opacity: 0.75; }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .clear-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      padding: 9px 16px;
+      border-radius: 8px;
+      font-size: 13px; font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .clear-btn:hover { border-color: var(--red); color: var(--red); }
+
+    /* ─── Result ──────────────────────────────────────────────────────────── */
+    .result-header {
+      display: flex; align-items: center; justify-content: space-between;
+    }
+
+    .result-header-left {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 11px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.07em;
+      color: var(--text-muted);
+    }
+
+    .status-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--border);
+      transition: background 0.2s, box-shadow 0.2s;
+    }
+
+    .status-dot.ok      { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .status-dot.err     { background: var(--red);   box-shadow: 0 0 6px var(--red);   }
+    .status-dot.loading { background: var(--amber); animation: blink 1s ease-in-out infinite; }
+
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+    .result-actions {
+      display: flex; align-items: center; gap: 8px;
+    }
+
+    .elapsed {
+      font-size: 11px; font-family: 'JetBrains Mono', monospace;
+      color: var(--text-muted);
+    }
+
+    .icon-btn {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      padding: 4px 11px;
+      border-radius: 6px;
+      font-size: 11.5px; font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .icon-btn:hover { border-color: var(--accent); color: #a5b4fc; }
+
+    .result-body {
+      padding: 16px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12.5px;
+      line-height: 1.75;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 520px;
+      overflow-y: auto;
+      color: var(--text);
+    }
+
+    /* ─── Full-context multi-panel layout ─────────────────────────────────── */
+    .result-body.fc-layout {
+      font-family: 'Inter', -apple-system, sans-serif;
+      font-size: 13px;
+      line-height: 1.5;
+      white-space: normal;
+      max-height: none;
+      padding: 12px;
+    }
+
+    .fc-panel {
+      margin-bottom: 14px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .fc-panel-header {
+      padding: 7px 12px;
+      font-size: 10.5px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.08em;
+      display: flex; align-items: center; gap: 8px;
+    }
+
+    .fc-ph-iucn    { background: rgba(99,102,241,.14); color: #a5b4fc; }
+    .fc-ph-wiki    { background: rgba(20,184,166,.14); color: #5eead4; }
+    .fc-ph-photo   { background: rgba(16,185,129,.14); color: #6ee7b7; }
+    .fc-ph-payload { background: rgba(168,85,247,.14); color: #d8b4fe; }
+    .fc-ph-traits  { background: rgba(251,191,36,.14); color: #fde68a; }
+    .fc-ph-forward { background: rgba(99,102,241,.22); color: #c7d2fe; border-bottom: 1px solid rgba(99,102,241,.35); }
+
+    .fc-panel-body { padding: 10px 12px; }
+
+    .fc-kv-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .fc-kv-table td { padding: 4px 8px; vertical-align: top; }
+    .fc-kv-table tr:nth-child(odd) td { background: rgba(255,255,255,.03); }
+    .fc-kv-table td:first-child {
+      color: var(--text-muted); white-space: nowrap; width: 155px;
+      font-family: 'JetBrains Mono', monospace; font-size: 11px;
+    }
+    .fc-kv-table td:last-child { color: var(--text); word-break: break-word; }
+
+    .fc-wiki-meta { font-size: 11px; color: var(--text-muted); margin-bottom: 6px; }
+
+    .fc-wiki-extract {
+      max-height: 180px; overflow-y: auto;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px;
+      font-size: 12px; line-height: 1.7;
+      color: var(--text-dim);
+      white-space: pre-wrap; word-break: break-word;
+    }
+
+    .fc-photo-row { display: flex; align-items: flex-start; gap: 14px; }
+    .fc-photo-row img {
+      width: 110px; height: 80px;
+      object-fit: cover; border-radius: 6px;
+      border: 1px solid var(--border); flex-shrink: 0;
+    }
+    .fc-photo-info { font-size: 12px; color: var(--text-dim); line-height: 1.6; }
+
+    .fc-trait-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .fc-trait-card {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 7px; padding: 8px 10px;
+    }
+    .fc-trait-lbl {
+      font-size: 10px; color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 3px;
+    }
+    .fc-trait-val {
+      font-size: 12px; color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      word-break: break-word;
+    }
+
+    .fc-forwarded-badge {
+      font-size: 10px; color: #818cf8;
+      background: rgba(99,102,241,.12);
+      padding: 2px 8px; border-radius: 20px;
+      font-weight: 600; letter-spacing: 0;
+    }
+
+    .fc-json {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11.5px; white-space: pre-wrap;
+      word-break: break-word; line-height: 1.65;
+      background: var(--surface2);
+      border-radius: 6px; padding: 10px 12px;
+      max-height: 260px; overflow-y: auto;
+    }
+
+    .placeholder {
+      color: var(--text-muted);
+      font-style: italic;
+      font-family: 'Inter', sans-serif;
+      font-size: 13px;
+    }
+
+    /* ─── JSON syntax highlight ────────────────────────────────────────────── */
+    .jk  { color: var(--purple); }   /* key    */
+    .js  { color: var(--teal);   }   /* string */
+    .jn  { color: var(--orange); }   /* number */
+    .jb  { color: var(--blue);   }   /* bool   */
+    .jnu { color: var(--text-dim);}  /* null   */
+    .jbr { color: var(--text-muted);} /* brackets / punctuation */
+
+    /* ─── Photo preview ────────────────────────────────────────────────────── */
+    .photo-preview {
+      display: none;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px;
+      gap: 14px;
+      align-items: flex-start;
+    }
+
+    .photo-preview.visible { display: flex; }
+
+    .photo-preview img {
+      width: 120px; height: 90px;
+      object-fit: cover;
+      border-radius: 7px;
+      border: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .photo-info { display: flex; flex-direction: column; gap: 5px; }
+    .photo-info .pi-label { font-size: 10.5px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
+    .photo-info .pi-value { font-size: 12.5px; color: var(--text-dim); word-break: break-all; }
+
+    /* ─── Pipeline Inspector ──────────────────────────────────────────────────── */
+    .ph-field-row { display: flex; align-items: flex-start; gap: 7px; flex-wrap: wrap; margin-bottom: 7px; }
+    .ph-row-lbl {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .06em; padding: 2px 7px; border-radius: 10px;
+      flex-shrink: 0; margin-top: 2px; white-space: nowrap;
+    }
+    .ph-row-lbl.reads     { background: rgba(99,102,241,.15);  color: #a5b4fc; }
+    .ph-row-lbl.adds      { background: rgba(16,185,129,.15);  color: #6ee7b7; }
+    .ph-row-lbl.transforms{ background: rgba(251,146,60,.15);  color: #fbbf24; }
+    .ph-row-lbl.missing   { background: rgba(239,68,68,.15);   color: #fca5a5; }
+    .ph-field-pill {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10.5px; padding: 2px 7px; border-radius: 4px;
+    }
+    .ph-reads      { background: rgba(99,102,241,.1);  color: #a5b4fc; }
+    .ph-adds       { background: rgba(16,185,129,.1);  color: #6ee7b7; }
+    .ph-transforms { background: rgba(251,146,60,.1);  color: #fbbf24; }
+    .ph-missing    { background: rgba(239,68,68,.1);   color: #fca5a5; }
+
+    select {
+      background: var(--surface2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 7px 10px;
+      font-size: 12.5px;
+      width: 100%;
+      font-family: 'JetBrains Mono', monospace;
+      outline: none;
+      cursor: pointer;
+    }
+    select:focus { border-color: var(--purple); }
+  </style>
+</head>
+<body>
+
+  <!-- ─── Header ─────────────────────────────────────────────────────────── -->
+  <header>
+    <div class="logo">🌿</div>
+    <h1>Species API Test Bench</h1>
+    <span class="header-badge">Dev Tools</span>
+    <span class="header-sep"></span>
+    <div class="server-status">
+      <div class="server-dot"></div>
+      localhost:8001
+    </div>
+  </header>
+
+  <!-- ─── Layout ─────────────────────────────────────────────────────────── -->
+  <div class="layout">
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-search">
+        <svg class="search-icon" width="13" height="13" viewBox="0 0 16 16" fill="none">
+          <circle cx="6.5" cy="6.5" r="5" stroke="#4b5563" stroke-width="1.5"/>
+          <path d="M10.5 10.5L14 14" stroke="#4b5563" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <input id="search-input" type="text" placeholder="Filter functions…" oninput="filterFns(this.value)" />
+      </div>
+
+      <div id="group-iucn">
+        <div class="group-header">
+          <div class="group-icon iucn">◈</div>
+          <span class="group-label-text">IUCN Fetcher</span>
+          <span class="fn-count" id="cnt-iucn"></span>
+        </div>
+      </div>
+
+      <div id="group-traits">
+        <div class="group-header" style="margin-top:4px">
+          <div class="group-icon traits">⬡</div>
+          <span class="group-label-text">Species Traits</span>
+          <span class="fn-count" id="cnt-traits"></span>
+        </div>
+      </div>
+
+      <div id="group-reporter">
+        <div class="group-header" style="margin-top:4px">
+          <div class="group-icon reporter">⚑</div>
+          <span class="group-label-text">Reporter</span>
+          <span class="fn-count" id="cnt-reporter"></span>
+        </div>
+      </div>
+
+      <div id="group-pipeline">
+        <div class="group-header" style="margin-top:4px">
+          <div class="group-icon pipeline">⇄</div>
+          <span class="group-label-text">Pipeline Inspector</span>
+          <span class="fn-count" id="cnt-pipeline"></span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main panel -->
+    <main class="main" id="main">
+
+      <!-- Empty state -->
+      <div class="empty-state" id="empty-state">
+        <div class="empty-graphic">⚡</div>
+        <h2>Select a function to test</h2>
+        <p>Pick any function from the sidebar. Inputs are auto-generated and results shown inline with syntax highlighting.</p>
+        <div class="empty-hints">
+          <div class="empty-hint" onclick="selectFn('iucn_get_raw')">get_iucn_raw()</div>
+          <div class="empty-hint" onclick="selectFn('traits_pipeline')">run_pipeline()</div>
+          <div class="empty-hint" onclick="selectFn('traits_wiki')">_wiki_extract()</div>
+          <div class="empty-hint" onclick="selectFn('traits_photo')">_inaturalist_photo()</div>
+        </div>
+      </div>
+
+      <!-- Function view (populated by JS) -->
+      <div id="fn-view"></div>
+
+    </main>
+  </div>
+
+  <script>
+  // ─── Function registry ─────────────────────────────────────────────────────
+  const FUNCTIONS = [
+    // ── IUCN Fetcher ──
+    {
+      id: 'iucn_get_raw',
+      name: 'get_iucn_raw',
+      module: 'iucn_fetcher',
+      desc: 'Fetch and return the full raw IUCN blob JSON for a species from Azure Blob Storage. This is the primary data source used by all other IUCN helper functions.',
+      method: 'GET',
+      url: '/dev/iucn/raw',
+      params: [
+        { name: 'scientific_name', label: 'Scientific Name', type: 'text', required: true, placeholder: 'e.g. Panthera tigris' },
+      ],
+    },
+    {
+      id: 'iucn_sci_name',
+      name: 'iucn_scientific_name',
+      module: 'iucn_fetcher',
+      desc: 'Extract the scientific name stored inside the IUCN taxon object.',
+      method: 'GET',
+      url: '/dev/iucn/scientific-name',
+      params: [
+        { name: 'scientific_name', label: 'Scientific Name', type: 'text', required: true, placeholder: 'e.g. Panthera tigris' },
+      ],
+    },
+    {
+      id: 'iucn_common_names',
+      name: 'iucn_common_names',
+      module: 'iucn_fetcher',
+      desc: 'Return a list of all main common names from the IUCN record.',
+      method: 'GET',
+      url: '/dev/iucn/common-names',
+      params: [
+        { name: 'scientific_name', label: 'Scientific Name', type: 'text', required: true, placeholder: 'e.g. Panthera tigris' },
+      ],
+    },
+    {
+      id: 'iucn_taxon_field',
+      name: 'iucn_taxon_field',
+      module: 'iucn_fetcher',
+      desc: 'Read any single field from the IUCN taxon sub-object (e.g. genus, family, kingdom, class, order).',
+      method: 'GET',
+      url: '/dev/iucn/taxon-field',
+      params: [
+        { name: 'scientific_name', label: 'Scientific Name', type: 'text', required: true, placeholder: 'e.g. Panthera tigris' },
+        { name: 'key', label: 'Taxon Field Key', type: 'text', required: true, placeholder: 'e.g. genus, family, kingdom' },
+      ],
+    },
+    {
+      id: 'iucn_rl_cat',
+      name: 'iucn_red_list_category',
+      module: 'iucn_fetcher',
+      desc: 'Return the English description of the IUCN Red List category (e.g. "Endangered").',
+      method: 'GET',
+      url: '/dev/iucn/red-list-category',
+      params: [
+        { name: 'scientific_name', label: 'Scientific Name', type: 'text', required: true, placeholder: 'e.g. Panthera tigris' },
+      ],
+    },
+    {
+      id: 'iucn_rl_code',
+      name: 'iucn_red_list_code',
+      module: 'iucn_fetcher',
+      desc: 'Return the shorthand IUCN Red List code (e.g. EN, VU, CR, LC, EX).',
+      method: 'GET',
+      url: '/dev/iucn/red-list-code',
+      params: [
+        { name: 'scientific_name', label: 'Scientific Name', type: 'text', required: true, placeholder: 'e.g. Panthera tigris' },
+      ],
+    },
+    {
+      id: 'iucn_pop_trend',
+      name: 'iucn_population_trend',
+      module: 'iucn_fetcher',
+      desc: 'Return the English population trend description (Increasing / Decreasing / Stable / Unknown).',
+      method: 'GET',
+      url: '/dev/iucn/population-trend',
+      params: [
+        { name: 'scientific_name', label: 'Scientific Name', type: 'text', required: true, placeholder: 'e.g. Panthera tigris' },
+      ],
+    },
+    {
+      id: 'iucn_threats',
+      name: 'iucn_threat_titles',
+      module: 'iucn_fetcher',
+      desc: 'Return the English descriptions of the top N threats listed in the IUCN assessment.',
+      method: 'GET',
+      url: '/dev/iucn/threat-titles',
+      params: [
+        { name: 'scientific_name', label: 'Scientific Name', type: 'text', required: true, placeholder: 'e.g. Panthera tigris' },
+        { name: 'limit', label: 'Limit', type: 'number', required: false, placeholder: '4', default: '4' },
+      ],
+    },
+    {
+      id: 'iucn_habitats',
+      name: 'iucn_habitat_names',
+      module: 'iucn_fetcher',
+      desc: 'Return the English descriptions of the top N habitats listed in the IUCN assessment.',
+      method: 'GET',
+      url: '/dev/iucn/habitat-names',
+      params: [
+        { name: 'scientific_name', label: 'Scientific Name', type: 'text', required: true, placeholder: 'e.g. Panthera tigris' },
+        { name: 'limit', label: 'Limit', type: 'number', required: false, placeholder: '4', default: '4' },
+      ],
+    },
+    {
+      id: 'iucn_taxonomy',
+      name: 'iucn_taxonomy',
+      module: 'iucn_fetcher',
+      desc: 'Return all taxonomy fields used by the reporter PDF: scientific name, common names, genus, family, order, class, kingdom. Use this to verify the reporter is populating genus/family correctly.',
+      method: 'GET',
+      url: '/dev/iucn/taxonomy',
+      params: [
+        { name: 'scientific_name', label: 'Scientific Name', type: 'text', required: true, placeholder: 'e.g. Panthera tigris' },
+      ],
+    },
+
+    // ── Species Traits ──
+    {
+      id: 'traits_normalize',
+      name: '_normalize',
+      module: 'species_traits',
+      desc: "Convert a scientific name to its Azure Blob prefix by stripping spaces: 'Caridina typus' → 'Caridinatypus'.",
+      method: 'GET',
+      url: '/dev/traits/normalize',
+      params: [
+        { name: 'name', label: 'Scientific Name', type: 'text', required: true, placeholder: 'e.g. Caridina typus' },
+      ],
+    },
+    {
+      id: 'traits_wiki',
+      name: '_wiki_extract',
+      module: 'species_traits',
+      desc: 'Fetch the plain-text Wikipedia extract for a species name. Returns the full article text or "Not found".',
+      method: 'GET',
+      url: '/dev/traits/wiki',
+      params: [
+        { name: 'name', label: 'Name (Wikipedia format)', type: 'text', required: true, placeholder: 'e.g. Panthera_tigris' },
+      ],
+    },
+    {
+      id: 'traits_photo',
+      name: '_inaturalist_photo',
+      module: 'species_traits',
+      desc: 'Return the medium photo URL and attribution from iNaturalist for a species. Shows an image preview when successful.',
+      method: 'GET',
+      url: '/dev/traits/inaturalist-photo',
+      params: [
+        { name: 'name', label: 'Scientific Name', type: 'text', required: true, placeholder: 'e.g. Panthera tigris' },
+      ],
+    },
+    {
+      id: 'traits_blob',
+      name: '_fetch_blob',
+      module: 'species_traits',
+      desc: 'Download the IUCN JSON blob directly from Azure Blob Storage. Accepts the raw scientific name (normalizes internally).',
+      method: 'GET',
+      url: '/dev/traits/fetch-blob',
+      params: [
+        { name: 'scientific_name', label: 'Scientific Name', type: 'text', required: true, placeholder: 'e.g. Panthera tigris' },
+      ],
+    },
+    {
+      id: 'traits_groq',
+      name: '_call_groq',
+      module: 'species_traits',
+      desc: 'Call the Groq LLM (llama-3.3-70b-versatile) with a structured payload to extract species traits. Returns lifespan, mass, length, risk level, fun facts, etc.',
+      method: 'POST',
+      url: '/dev/traits/groq',
+      params: [
+        {
+          name: 'payload',
+          label: 'Enriched Payload (JSON)',
+          type: 'textarea',
+          required: true,
+          placeholder: '{\n  "scientific_name": "Panthera tigris",\n  "common_names": ["Tiger"],\n  "category": "Endangered",\n  "wiki_extract": "The tiger is the largest living cat species..."\n}',
+        },
+      ],
+      postBody: (params) => ({ payload: JSON.parse(params.payload) }),
+    },
+    {
+      id: 'traits_pipeline',
+      name: 'run_pipeline',
+      module: 'species_traits',
+      desc: 'Run the full species traits pipeline: blob fetch → Wikipedia + iNaturalist (concurrent) → Groq LLM extraction. Results are cached for 24 hours.',
+      method: 'GET',
+      url: '/dev/traits/run-pipeline',
+      params: [
+        { name: 'scientific_name', label: 'Scientific Name', type: 'text', required: true, placeholder: 'e.g. Panthera tigris' },
+      ],
+    },
+    {
+      id: 'traits_full_context',
+      name: 'full_context',
+      module: 'species_traits',
+      desc: 'Full pipeline context inspector: shows all intermediate data in named panels — IUCN blob summary, Wikipedia extract (with exact search name used), iNaturalist photo, the exact Groq input payload (including wiki text), Groq-extracted traits, and the final forwarded result sent to ExplorerAgent. Bypasses the 24-hour cache.',
+      method: 'GET',
+      url: '/dev/traits/full-context',
+      params: [
+        { name: 'scientific_name', label: 'Scientific Name', type: 'text', required: true, placeholder: 'e.g. Panthera tigris' },
+      ],
+    },
+
+    // ── Reporter / Assessment ──
+    {
+      id: 'reporter_threat',
+      name: '_threat_level_from_iucn',
+      module: 'reporter',
+      desc: 'Derive the conservation threat level deterministically from the IUCN red list code — no LLM, instant result. Returns one of: Critical, High, Moderate, Low, Unknown.',
+      method: 'GET',
+      url: '/dev/reporter/threat-level',
+      params: [
+        { name: 'scientific_name', label: 'Scientific Name', type: 'text', required: true, placeholder: 'e.g. Panthera tigris' },
+      ],
+    },
+    {
+      id: 'reporter_safety',
+      name: 'get_species_safety_data',
+      module: 'reporter',
+      desc: 'Call Azure OpenAI GPT to generate user-facing safety precautions and the human risk level for a species. Returns user_safety_precautions (plain-language items shown to the reporter) and risk_level. This is the exact call the reporter agent makes.',
+      method: 'GET',
+      url: '/dev/reporter/safety-data',
+      params: [
+        { name: 'scientific_name', label: 'Scientific Name', type: 'text', required: true, placeholder: 'e.g. Panthera tigris' },
+      ],
+    },
+    {
+      id: 'reporter_summary',
+      name: 'report_summary',
+      module: 'reporter',
+      desc: 'Simulate all the fields the reporter PDF will populate: full taxonomy (genus, family, order, class, kingdom), red list code/category, population trend, threat level. Confidence and severity are noted as runtime values.',
+      method: 'GET',
+      url: '/dev/reporter/report-summary',
+      params: [
+        { name: 'scientific_name', label: 'Scientific Name', type: 'text', required: true, placeholder: 'e.g. Panthera tigris' },
+      ],
+    },
+
+    // ── Pipeline Inspector ──
+    {
+      id: 'pipeline_tool_selection',
+      name: 'tool_selection',
+      module: 'pipeline',
+      desc: 'Simulate the Orchestrator _available_tools() gate. Shows which Layer 1 tools would be offered based on input presence, plus the exact [Context] block the Azure OpenAI tool-selection call receives.',
+      method: 'GET',
+      url: '/dev/pipeline/tool-selection',
+      params: [
+        { name: 'has_message', label: 'Has Message',       type: 'select', required: false, options: ['true','false'], default: 'true'  },
+        { name: 'has_image',   label: 'Has Image URL',     type: 'select', required: false, options: ['true','false'], default: 'false' },
+        { name: 'has_gps',     label: 'Has GPS (lat+lon)', type: 'select', required: false, options: ['true','false'], default: 'false' },
+      ],
+    },
+    {
+      id: 'pipeline_name_resolution',
+      name: 'name_resolution',
+      module: 'pipeline',
+      desc: 'Trace _extract_scientific_name() priority logic: image result wins over text result. Shows which branch is taken, the skip-list check, and the name SpeciesInfoAgent would use for the IUCN lookup.',
+      method: 'GET',
+      url: '/dev/pipeline/name-resolution',
+      params: [
+        { name: 'image_scientific_name', label: 'Image Scientific Name', type: 'text', required: false, placeholder: 'e.g. Panthera tigris (or leave blank)' },
+        { name: 'text_scientific_name',  label: 'Text Scientific Name',  type: 'text', required: false, placeholder: 'e.g. Tiger (fallback)' },
+      ],
+    },
+    {
+      id: 'pipeline_severity_chain',
+      name: 'severity_chain',
+      module: 'pipeline',
+      desc: 'Trace Reporter severity inference: text_severity from Layer 1 → if empty, infer from GPT risk_level (very high→CRITICAL, high→HIGH, caution→MEDIUM, else→LOW). Shows which branch is taken.',
+      method: 'GET',
+      url: '/dev/pipeline/severity-chain',
+      params: [
+        { name: 'text_severity', label: 'text_severity (TextAnalysisResult)', type: 'text', required: false, placeholder: 'e.g. High  (or leave blank)' },
+        { name: 'risk_level',    label: 'risk_level (GPT safety call)',        type: 'text', required: false, placeholder: 'e.g. very high, high, caution' },
+      ],
+    },
+    {
+      id: 'pipeline_layer1_parse',
+      name: 'layer1_parse',
+      module: 'pipeline',
+      desc: 'Validate raw Layer 1 tool output JSON strings exactly as the Orchestrator receives them. Checks required fields in ImageAnalysisResult, TextAnalysisResult, and location_context. Highlights missing values.',
+      method: 'GET',
+      url: '/dev/pipeline/layer1-parse',
+      params: [
+        { name: 'image_result_json',    label: 'ImageAnalysisResult JSON',  type: 'textarea', required: false,
+          placeholder: '{"is_relevant": true, "scientific_name": "Panthera tigris", "confidence": 0.92, "identification_source": "vision", "family": "Felidae", "genus": "Panthera"}' },
+        { name: 'text_result_json',     label: 'TextAnalysisResult JSON',   type: 'textarea', required: false,
+          placeholder: '{"size": "large", "severity": "High", "scientific_name": "Panthera tigris", "common_name": "Tiger", "identification_confidence": 0.9}' },
+        { name: 'location_result_json', label: 'location_context JSON',     type: 'textarea', required: false,
+          placeholder: '{"district": "Corbett", "state": "Uttarakhand", "country": "India", "protected_area": "Jim Corbett NP", "geohash": "ttnd", "formatted": "Corbett, Uttarakhand, India"}' },
+      ],
+    },
+    {
+      id: 'pipeline_explorer_fields',
+      name: 'iucn_explorer_fields',
+      module: 'pipeline',
+      desc: 'Show all IUCN base fields vs the 9-field Groq overlay for ExplorerAgent. Highlights key collisions — IUCN fields that would be silently overwritten by Groq output.',
+      method: 'GET',
+      url: '/dev/pipeline/iucn-explorer-fields',
+      params: [
+        { name: 'scientific_name', label: 'Scientific Name', type: 'text', required: true, placeholder: 'e.g. Panthera tigris' },
+      ],
+    },
+    {
+      id: 'pipeline_species_cache',
+      name: 'species_cache',
+      module: 'pipeline',
+      desc: 'Check both Cosmos DB species cache buckets: iucn:<name> (24h) and traits:<name> (24h). Shows hit/miss, document IDs, and a data summary. Reveals whether the next pipeline run will be a cache hit.',
+      method: 'GET',
+      url: '/dev/pipeline/species-cache',
+      params: [
+        { name: 'scientific_name', label: 'Scientific Name', type: 'text', required: true, placeholder: 'e.g. Panthera tigris' },
+      ],
+    },
+    {
+      id: 'pipeline_geocode',
+      name: 'location_geocode',
+      module: 'pipeline',
+      desc: 'Run the full location_context geocoding pipeline for a GPS coordinate: Nominatim reverse geocode → protected area lookup → geohash + formatted address. Shows field-presence map for all 6 output keys.',
+      method: 'GET',
+      url: '/dev/pipeline/location-geocode',
+      params: [
+        { name: 'latitude',  label: 'Latitude',  type: 'number', required: true, placeholder: 'e.g. 29.5300' },
+        { name: 'longitude', label: 'Longitude', type: 'number', required: true, placeholder: 'e.g. 79.0500' },
+      ],
+    },
+    {
+      id: 'pipeline_data_handoff',
+      name: 'data_handoff',
+      module: 'pipeline',
+      desc: 'Comprehensive field-level data handoff map: IUCN → SpeciesInfoAgent output → per-agent field map showing reads/adds/transforms for Explorer, Reporter, or Encyclopedia. No LLM calls made.',
+      method: 'GET',
+      url: '/dev/pipeline/data-handoff',
+      params: [
+        { name: 'scientific_name', label: 'Scientific Name', type: 'text',   required: true, placeholder: 'e.g. Panthera tigris' },
+        { name: 'query_type',      label: 'Query Type',      type: 'select', required: true, options: ['explore','report','encyclopedia'], default: 'explore' },
+      ],
+    },
+  ];
+
+  // ─── Build sidebar ─────────────────────────────────────────────────────────
+  const groupIucn     = document.getElementById('group-iucn');
+  const groupTraits   = document.getElementById('group-traits');
+  const groupReporter  = document.getElementById('group-reporter');
+  const groupPipeline  = document.getElementById('group-pipeline');
+
+  FUNCTIONS.forEach(fn => {
+    const el = document.createElement('div');
+    el.className = 'fn-item';
+    el.dataset.id  = fn.id;
+    el.dataset.mod = fn.module;
+    el.title = fn.name;
+    el.innerHTML = `
+      <span class="method-pill ${fn.method === 'GET' ? 'pill-get' : 'pill-post'}">${fn.method}</span>
+      ${fn.name}
+    `;
+    el.addEventListener('click', () => selectFn(fn.id));
+    const target = fn.module === 'iucn_fetcher' ? groupIucn
+                 : fn.module === 'reporter'      ? groupReporter
+                 : fn.module === 'pipeline'      ? groupPipeline
+                 : groupTraits;
+    target.appendChild(el);
+  });
+
+  updateCounts();
+
+  function updateCounts() {
+    const iucnVisible     = [...groupIucn.querySelectorAll('.fn-item:not(.hidden)')].length;
+    const traitsVisible   = [...groupTraits.querySelectorAll('.fn-item:not(.hidden)')].length;
+    const reporterVisible = [...groupReporter.querySelectorAll('.fn-item:not(.hidden)')].length;
+    const pipelineVisible = [...groupPipeline.querySelectorAll('.fn-item:not(.hidden)')].length;
+    document.getElementById('cnt-iucn').textContent     = iucnVisible;
+    document.getElementById('cnt-traits').textContent   = traitsVisible;
+    document.getElementById('cnt-reporter').textContent = reporterVisible;
+    document.getElementById('cnt-pipeline').textContent = pipelineVisible;
+  }
+
+  // ─── Sidebar filter ─────────────────────────────────────────────────────────
+  function filterFns(q) {
+    q = q.toLowerCase().trim();
+    document.querySelectorAll('.fn-item').forEach(el => {
+      const matches = !q || el.title.toLowerCase().includes(q) || el.dataset.mod.includes(q);
+      el.classList.toggle('hidden', !matches);
+    });
+    updateCounts();
+  }
+
+  // ─── Select function ────────────────────────────────────────────────────────
+  let currentFn  = null;
+  let resultData = null;
+
+  function selectFn(id) {
+    currentFn  = FUNCTIONS.find(f => f.id === id);
+    resultData = null;
+    if (!currentFn) return;
+
+    document.querySelectorAll('.fn-item').forEach(el =>
+      el.classList.toggle('active', el.dataset.id === id)
+    );
+
+    document.getElementById('empty-state').style.display = 'none';
+
+    const view = document.getElementById('fn-view');
+    view.style.display = 'flex';
+    view.style.flexDirection = 'column';
+    view.style.gap = '20px';
+
+    const modClass = currentFn.module === 'iucn_fetcher' ? 'mod-iucn'
+                   : currentFn.module === 'reporter'      ? 'mod-reporter'
+                   : currentFn.module === 'pipeline'      ? 'mod-pipeline'
+                   : 'mod-traits';
+
+    view.innerHTML = `
+      <!-- Title -->
+      <div>
+        <div class="fn-title-row">
+          <span class="fn-name">${currentFn.name}<span class="paren">()</span></span>
+          <span class="mod-tag ${modClass}">${currentFn.module}</span>
+        </div>
+        <p class="fn-desc" style="margin-top:8px">${currentFn.desc}</p>
+      </div>
+
+      <!-- Parameters card -->
+      <div class="card">
+        <div class="card-header">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+            <rect x="1" y="1" width="14" height="14" rx="3" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M4.5 5h7M4.5 8h5M4.5 11h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          Parameters
+        </div>
+        <div class="form-body">
+          ${renderParams(currentFn.params)}
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div class="actions">
+        <button class="run-btn" id="run-btn" onclick="runFn()">
+          <div class="spinner"></div>
+          <span class="run-text">
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor" style="vertical-align:-1px; margin-right:3px">
+              <path d="M2.5 1.5l7 4.5-7 4.5V1.5z"/>
+            </svg>
+            Run
+          </span>
+        </button>
+        <button class="clear-btn" onclick="clearResult()">Clear</button>
+      </div>
+
+      <!-- Photo preview (for inaturalist) -->
+      <div class="photo-preview" id="photo-preview">
+        <img id="photo-img" src="" alt="Species photo" />
+        <div class="photo-info">
+          <div class="pi-label">Photo URL</div>
+          <div class="pi-value" id="photo-url-txt">—</div>
+          <div class="pi-label" style="margin-top:8px">Attribution</div>
+          <div class="pi-value" id="photo-attr-txt">—</div>
+        </div>
+      </div>
+
+      <!-- Result card -->
+      <div class="card" id="result-card">
+        <div class="card-header result-header">
+          <div class="result-header-left">
+            <div class="status-dot" id="status-dot"></div>
+            Response
+          </div>
+          <div class="result-actions">
+            <span class="elapsed" id="elapsed"></span>
+            <button class="icon-btn" onclick="copyResult()">Copy JSON</button>
+            <button class="icon-btn" onclick="expandResult()">Expand</button>
+          </div>
+        </div>
+        <div class="result-body" id="result-body">
+          <span class="placeholder">Run the function to see output here.</span>
+        </div>
+      </div>
+    `;
+
+    // Enter key triggers run on text inputs
+    view.querySelectorAll('input[type="text"]').forEach(inp =>
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') runFn(); })
+    );
+  }
+
+  function renderParams(params) {
+    // Group single-line params in pairs
+    const fields = params.map(p => `
+      <div class="form-group">
+        <label class="form-label" for="p-${p.name}">
+          ${p.label}
+          ${p.required ? '<span class="req">required</span>' : ''}
+          <span class="type">${p.type === 'textarea' ? 'json' : p.type}</span>
+        </label>
+        ${p.type === 'textarea'
+          ? `<textarea id="p-${p.name}" placeholder="${escAttr(p.placeholder||'')}" spellcheck="false"></textarea>`
+          : p.type === 'select'
+          ? `<select id="p-${p.name}">${(p.options||[]).map(o=>`<option value="${escAttr(o)}"${p.default===o?' selected':''} >${escAttr(o)}</option>`).join('')}</select>`
+          : `<input id="p-${p.name}" type="${p.type}" placeholder="${escAttr(p.placeholder||'')}" ${p.default ? `value="${escAttr(p.default)}"` : ''} />`
+        }
+      </div>
+    `);
+
+    // Wrap text/number inputs in a responsive grid row
+    const hasTextarea = params.some(p => p.type === 'textarea');
+    if (hasTextarea) return fields.join('');
+    return `<div class="form-row">${fields.join('')}</div>`;
+  }
+
+  // ─── Run ────────────────────────────────────────────────────────────────────
+  async function runFn() {
+    if (!currentFn) return;
+
+    const btn     = document.getElementById('run-btn');
+    const dot     = document.getElementById('status-dot');
+    const body    = document.getElementById('result-body');
+    const elapsed = document.getElementById('elapsed');
+
+    btn.disabled = true;
+    btn.classList.add('loading');
+    dot.className = 'status-dot loading';
+    body.innerHTML = '<span class="placeholder">Fetching…</span>';
+    elapsed.textContent = '';
+
+    const t0 = performance.now();
+
+    try {
+      let url      = currentFn.url;
+      let init     = { method: currentFn.method };
+
+      if (currentFn.method === 'GET') {
+        const qs = new URLSearchParams();
+        for (const p of currentFn.params) {
+          const v = document.getElementById(`p-${p.name}`)?.value?.trim();
+          if (v) qs.set(p.name, v);
+        }
+        if ([...qs].length) url += '?' + qs;
+
+      } else {
+        // POST — build body
+        let postData;
+        if (currentFn.postBody) {
+          const raw = {};
+          for (const p of currentFn.params) {
+            raw[p.name] = document.getElementById(`p-${p.name}`)?.value?.trim() ?? '';
+          }
+          postData = currentFn.postBody(raw);
+        } else {
+          postData = {};
+          for (const p of currentFn.params) {
+            const v = document.getElementById(`p-${p.name}`)?.value?.trim();
+            if (!v) continue;
+            postData[p.name] = p.type === 'textarea' ? tryParseJSON(v) : v;
+          }
+        }
+        init.headers = { 'Content-Type': 'application/json' };
+        init.body    = JSON.stringify(postData);
+      }
+
+      const resp  = await fetch(url, init);
+      const ms    = performance.now() - t0;
+      const data  = await resp.json();
+      resultData  = data;
+
+      elapsed.textContent = `${(ms / 1000).toFixed(2)}s`;
+      dot.className = resp.ok ? 'status-dot ok' : 'status-dot err';
+
+      if (currentFn.id === 'traits_full_context' && resp.ok) {
+        body.classList.add('fc-layout');
+        body.innerHTML = renderFullContext(data);
+      } else if (currentFn.id === 'pipeline_data_handoff' && resp.ok) {
+        body.classList.add('fc-layout');
+        body.innerHTML = renderPipelineCheck(data);
+      } else {
+        body.classList.remove('fc-layout');
+        body.innerHTML = syntaxHighlight(JSON.stringify(data, null, 2));
+      }
+
+      // Photo preview
+      if (currentFn.id === 'traits_photo' && resp.ok && data.photo_url) {
+        const preview = document.getElementById('photo-preview');
+        document.getElementById('photo-img').src          = data.photo_url;
+        document.getElementById('photo-url-txt').textContent  = data.photo_url  ?? '—';
+        document.getElementById('photo-attr-txt').textContent = data.attribution ?? '—';
+        preview.classList.toggle('visible', !!data.photo_url);
+      }
+
+    } catch (err) {
+      elapsed.textContent = `${((performance.now() - t0) / 1000).toFixed(2)}s`;
+      dot.className       = 'status-dot err';
+      body.innerHTML      = `<span style="color:var(--red)">${esc(err.message)}</span>`;
+      resultData          = null;
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove('loading');
+    }
+  }
+
+  function clearResult() {
+    const body    = document.getElementById('result-body');
+    const dot     = document.getElementById('status-dot');
+    const elapsed = document.getElementById('elapsed');
+    const preview = document.getElementById('photo-preview');
+    if (!body) return;
+    body.classList.remove('fc-layout');
+    body.innerHTML = '<span class="placeholder">Run the function to see output here.</span>';
+    dot.className  = 'status-dot';
+    elapsed.textContent = '';
+    resultData = null;
+    if (preview) preview.classList.remove('visible');
+  }
+
+  function expandResult() {
+    const body = document.getElementById('result-body');
+    if (!body) return;
+    const isExpanded = body.style.maxHeight === 'none';
+    body.style.maxHeight  = isExpanded ? '520px' : 'none';
+    const btn = document.querySelector('[onclick="expandResult()"]');
+    if (btn) btn.textContent = isExpanded ? 'Expand' : 'Collapse';
+  }
+
+  function copyResult() {
+    if (!resultData) return;
+    navigator.clipboard.writeText(JSON.stringify(resultData, null, 2)).then(() => {
+      const btn = document.querySelector('[onclick="copyResult()"]');
+      if (!btn) return;
+      const orig = btn.textContent;
+      btn.textContent = 'Copied!';
+      btn.style.color = 'var(--green)';
+      btn.style.borderColor = 'var(--green)';
+      setTimeout(() => {
+        btn.textContent = orig;
+        btn.style.color = btn.style.borderColor = '';
+      }, 1600);
+    });
+  }
+
+  // ─── Full-context renderer ───────────────────────────────────────────────────
+  function renderFullContext(data) {
+    const iucn     = data.iucn_summary        || {};
+    const wiki     = data.wikipedia           || {};
+    const photo    = data.inaturalist_photo   || {};
+    const traits   = data.groq_traits         || {};
+    const forwarded = data.forwarded_result   || {};
+    const payload  = data.groq_input_payload  || {};
+
+    // ── IUCN summary table ──
+    const iucnRows = [
+      ['scientific_name',   iucn.scientific_name],
+      ['common_names',      (iucn.common_names || []).join(', ') || '—'],
+      ['genus',             iucn.genus],
+      ['family',            iucn.family],
+      ['order',             iucn.order],
+      ['class',             iucn.class],
+      ['kingdom',           iucn.kingdom],
+      ['phylum',            iucn.phylum],
+      ['red_list_category', iucn.red_list_category],
+      ['red_list_code',     iucn.red_list_code],
+      ['population_trend',  iucn.population_trend],
+      ['top_threats',       (iucn.top_threats || []).join('; ') || '—'],
+      ['habitats',          (iucn.habitats    || []).join('; ') || '—'],
+    ].map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v ?? '—')}</td></tr>`).join('');
+
+    // ── Groq trait cards ──
+    const traitKeys = [
+      'lifespan_years', 'mass', 'length', 'short_description',
+      'human_risk_level', 'human_threat_level',
+      'fun_fact_1', 'fun_fact_2', 'fun_fact_3',
+    ];
+    const traitCards = traitKeys.map(k => `
+      <div class="fc-trait-card">
+        <div class="fc-trait-lbl">${k.replace(/_/g, ' ')}</div>
+        <div class="fc-trait-val">${esc(traits[k] ?? '—')}</div>
+      </div>`).join('');
+
+    // ── Groq payload (wiki_extract shown separately, keep this compact) ──
+    const payloadNoWiki = Object.fromEntries(
+      Object.entries(payload).filter(([k]) => k !== 'wiki_extract')
+    );
+
+    // ── Photo section ──
+    const photoHtml = photo.photo_url
+      ? `<div class="fc-photo-row">
+           <img src="${esc(photo.photo_url)}" alt="species" onerror="this.style.display='none'" />
+           <div class="fc-photo-info">
+             <div><span style="color:var(--text-muted)">URL</span><br>
+               <a href="${esc(photo.photo_url)}" target="_blank" style="color:#6ee7b7;font-size:11px;word-break:break-all">${esc(photo.photo_url)}</a>
+             </div>
+             <div style="margin-top:8px"><span style="color:var(--text-muted)">Attribution</span><br>${esc(photo.attribution || '—')}</div>
+           </div>
+         </div>`
+      : `<span style="color:var(--text-muted);font-size:12px">No photo available</span>`;
+
+    // ── Groq error banner (if present) ──
+    const errHtml = data.groq_error
+      ? `<div class="fc-panel" style="border-color:var(--red)">
+           <div class="fc-panel-header" style="background:rgba(239,68,68,.15);color:var(--red)">⚠ Groq Error</div>
+           <div class="fc-panel-body" style="color:var(--red);font-size:12px">${esc(data.groq_error)}</div>
+         </div>`
+      : '';
+
+    return `
+      <div class="fc-panel">
+        <div class="fc-panel-header fc-ph-iucn">📊 IUCN Summary</div>
+        <div class="fc-panel-body">
+          <table class="fc-kv-table"><tbody>${iucnRows}</tbody></table>
+        </div>
+      </div>
+
+      <div class="fc-panel">
+        <div class="fc-panel-header fc-ph-wiki">📖 Wikipedia</div>
+        <div class="fc-panel-body">
+          <div class="fc-wiki-meta">
+            Search name used: <strong style="color:var(--text)">${esc(wiki.search_name_used || '—')}</strong>
+          </div>
+          <div class="fc-wiki-extract">${esc(wiki.extract || 'Not found')}</div>
+        </div>
+      </div>
+
+      <div class="fc-panel">
+        <div class="fc-panel-header fc-ph-photo">📷 iNaturalist Photo</div>
+        <div class="fc-panel-body">${photoHtml}</div>
+      </div>
+
+      <div class="fc-panel">
+        <div class="fc-panel-header fc-ph-payload">
+          🧠 Groq Input Payload
+          <span style="font-size:10px;opacity:.65;text-transform:none;letter-spacing:0;font-weight:400">
+            (wiki_extract shown in Wikipedia panel above)
+          </span>
+        </div>
+        <div class="fc-panel-body">
+          <div class="fc-json">${syntaxHighlight(JSON.stringify(payloadNoWiki, null, 2))}</div>
+        </div>
+      </div>
+
+      ${errHtml}
+
+      <div class="fc-panel">
+        <div class="fc-panel-header fc-ph-traits">⬡ Groq Traits (Extracted)</div>
+        <div class="fc-panel-body">
+          <div class="fc-trait-grid">${traitCards}</div>
+        </div>
+      </div>
+
+      <div class="fc-panel" style="border-color:rgba(99,102,241,.4)">
+        <div class="fc-panel-header fc-ph-forward">
+          → Forwarded Result
+          <span class="fc-forwarded-badge">ExplorerAgent</span>
+        </div>
+        <div class="fc-panel-body">
+          <div class="fc-json">${syntaxHighlight(JSON.stringify(forwarded, null, 2))}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  // ─── Pipeline data-handoff renderer ──────────────────────────────────────────
+  function renderPipelineCheck(data) {
+    const speciesInfo  = data.species_info_agent_output || {};
+    const agentMap     = data.agent_field_map           || {};
+    const queryType    = data.query_type   || '?';
+    const resolvedName = data.resolved_name || '';
+
+    // Species info table
+    const siRows = Object.entries(speciesInfo).map(([k, v]) => {
+      const display = Array.isArray(v)
+        ? v.join(', ')
+        : (typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v ?? '—'));
+      const dim = (k === 'top_level_keys' || k === 'assessment_id');
+      return `<tr${dim ? ' style="opacity:.45"' : ''}><td>${esc(k)}</td><td>${esc(display)}</td></tr>`;
+    }).join('') || `<tr><td colspan="2" style="color:var(--text-muted)">No data</td></tr>`;
+
+    // Agent field-map rows
+    const mapRows = Object.entries(agentMap).map(([k, v]) => {
+      const key = k.replace(/_/g, ' ');
+      if (v === null || v === undefined) return '';
+      if (Array.isArray(v) && !v.length) return '';
+
+      let cls = 'ph-reads', lblCls = 'reads';
+      if (k.includes('adds'))       { cls = 'ph-adds';       lblCls = 'adds'; }
+      else if (k.includes('transforms')) { cls = 'ph-transforms'; lblCls = 'transforms'; }
+      else if (k.includes('missing'))    { cls = 'ph-missing';    lblCls = 'missing'; }
+
+      if (Array.isArray(v)) {
+        const pills = v.map(f => `<span class="ph-field-pill ${cls}">${esc(f)}</span>`).join(' ');
+        return `<div class="ph-field-row"><span class="ph-row-lbl ${lblCls}">${esc(key)}</span>${pills}</div>`;
+      }
+      // Scalar / bool
+      const val = typeof v === 'boolean' ? (v ? '✓ yes' : '✗ no') : esc(String(v));
+      return `<div class="ph-field-row" style="flex-direction:column;gap:2px">
+        <span style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">${esc(key)}</span>
+        <span style="font-size:12px;color:var(--text-dim);font-family:'JetBrains Mono',monospace">${val}</span>
+      </div>`;
+    }).filter(Boolean).join('');
+
+    const errHtml = data.error
+      ? `<div class="fc-panel" style="border-color:var(--red)">
+           <div class="fc-panel-header" style="background:rgba(239,68,68,.15);color:var(--red)">⚠ Error</div>
+           <div class="fc-panel-body" style="color:var(--red);font-size:12px">${esc(data.error)}</div>
+         </div>`
+      : '';
+
+    return `
+      ${errHtml}
+      <div class="fc-panel">
+        <div class="fc-panel-header" style="background:rgba(14,165,233,.12);color:#7dd3fc">
+          🔍 SpeciesInfoAgent → IUCN Fields
+          ${resolvedName ? `<span style="font-size:10px;opacity:.65;text-transform:none;letter-spacing:0;font-weight:400;margin-left:6px">${esc(resolvedName)}</span>` : ''}
+        </div>
+        <div class="fc-panel-body">
+          <table class="fc-kv-table"><tbody>${siRows}</tbody></table>
+        </div>
+      </div>
+      <div class="fc-panel">
+        <div class="fc-panel-header" style="background:rgba(14,165,233,.12);color:#7dd3fc">
+          ⇄ Agent Field Map —
+          <span style="text-transform:none;letter-spacing:0;font-weight:600;margin-left:4px">${esc(queryType)}</span>
+        </div>
+        <div class="fc-panel-body">
+          <div style="display:flex;flex-direction:column;gap:8px">
+            ${mapRows || '<span style="color:var(--text-muted)">No field map available</span>'}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // ─── Helpers ────────────────────────────────────────────────────────────────
+  function esc(s) {
+    return String(s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+
+  function escAttr(s) { return esc(s); }
+
+  function tryParseJSON(s) {
+    try { return JSON.parse(s); } catch { return s; }
+  }
+
+  function syntaxHighlight(json) {
+    const s = json
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+    return s.replace(
+      /("(?:\\u[0-9a-fA-F]{4}|\\[^u]|[^\\"])*"(?:\s*:)?|\b(?:true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|[{}\[\],:])/g,
+      match => {
+        if (/^[{}\[\]]$/.test(match)) return `<span class="jbr">${match}</span>`;
+        if (/^[:,]$/.test(match))     return `<span class="jbr">${match}</span>`;
+        if (/^"/.test(match))         return /:$/.test(match) ? `<span class="jk">${match}</span>` : `<span class="js">${match}</span>`;
+        if (/true|false/.test(match)) return `<span class="jb">${match}</span>`;
+        if (/null/.test(match))       return `<span class="jnu">${match}</span>`;
+        return `<span class="jn">${match}</span>`;
+      }
+    );
+  }
+
+  // Select first function on load
+  selectFn('iucn_get_raw');
+  </script>
+
+</body>
+</html>

@@ -36,8 +36,22 @@ def iucn_common_names(raw: dict[str, Any]) -> list[str]:
     return [c["name"] for c in entries if c.get("main")]
 
 def iucn_taxon_field(raw: dict[str, Any], key: str) -> Any:
-    """Read any field directly from the taxon sub-object (genus, family, kingdom, …)."""
-    return (raw.get("taxon") or {}).get(key)
+    """Read any field directly from the taxon sub-object.
+    Accepts both short names (genus, family, class, order, kingdom, phylum)
+    and the full blob key names (genus_name, family_name, …) transparently.
+    """
+    taxon = raw.get("taxon") or {}
+    # The blob stores these as <name>_name keys — accept both forms
+    _ALIAS = {
+        "genus":   "genus_name",
+        "family":  "family_name",
+        "class":   "class_name",
+        "order":   "order_name",
+        "kingdom": "kingdom_name",
+        "phylum":  "phylum_name",
+    }
+    resolved = _ALIAS.get(key, key)
+    return taxon.get(resolved)
 
 def iucn_red_list_category(raw: dict[str, Any]) -> str:
     rl = raw.get("red_list_category") or {}
@@ -47,8 +61,7 @@ def iucn_red_list_code(raw: dict[str, Any]) -> str:
     return ((raw.get("red_list_category") or {}).get("code") or "").strip().upper()
 
 def iucn_population_trend(raw: dict[str, Any]) -> str:
-    trend = ((raw.get("population") or {}).get("trend") or {})
-    return ((trend.get("description") or {}).get("en") or "").strip()
+    return (((raw.get("population_trend") or {}).get("description") or {}).get("en") or "").strip()
 
 def iucn_threat_titles(raw: dict[str, Any], limit: int = 4) -> list[str]:
     """Return the English description of the top threats (for prompt context)."""

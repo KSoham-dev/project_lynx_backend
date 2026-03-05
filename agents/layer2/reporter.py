@@ -76,58 +76,39 @@ _RISK_COLOURS = {
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _SAFETY_SYSTEM_PROMPT = """\
-You are a senior wildlife biologist and field operations advisor for Prahari,
-India's national wildlife management and conservation authority system.
+You are a wildlife safety advisor for Prahari, India's national wildlife
+management system.
 
-Your output is an OFFICIAL DOCUMENT section read by forest officers, range
-officers, wildlife wardens, and divisional forest officers — NOT by the general
-public. Use formal, protocol-appropriate language.
+Given a species name and optional IUCN context, generate plain-language safety
+precautions for the member of the public who reported this sighting.
 
-Given a species' scientific name and optional IUCN assessment data, produce:
-1. Response protocols for field officers who have received a sighting report.
-2. Standard operating procedures to prevent conflict or disturbance.
-3. An accurate HUMAN SAFETY risk classification for this species.
-
-Return ONLY valid JSON with this exact structure:
+Return ONLY valid JSON — no markdown fences, no extra text — with this exact structure:
 {
-  "safety_guidelines": [
+  "user_safety_precautions": [
     "...",
     "..."
   ],
-  "precaution_guidelines": [
-    "...",
-    "..."
-  ],
-  "risk_level":       "Very High | High | Caution | Low",
-  "emergency_action": "<single most critical immediate protocol for responding officers>"
+  "risk_level": "Very High | High | Caution | Low"
 }
 
-CRITICAL — risk_level definition:
-  risk_level is EXCLUSIVELY the danger this species poses to HUMAN SAFETY if
-  encountered in the field. It has NOTHING to do with conservation status.
+user_safety_precautions: 4–6 clear, actionable items written for a non-expert.
+  - What to do immediately (back away calmly, do not run, etc.)
+  - What NOT to do (do not feed, do not corner, do not use flash)
+  - Who to call (local forest department, wildlife warden)
+  - Any species-specific behaviour the person should know
+  - Be concise — one sentence per item
 
-  Very High — species is known to actively attack or kill humans
-              (e.g. tiger, elephant, crocodile, king cobra)
-  High      — species can cause serious injury if cornered or threatened
-              (e.g. sloth bear, wild boar, leopard, Indian gaur)
-  Caution   — species may cause minor injury; generally avoids humans
-              (e.g. monitor lizard, Indian python, deer, wild dog)
-  Low       — species poses negligible danger to humans
-              (e.g. turtle, tortoise, small bird, deer fawn, most fish)
+risk_level — HUMAN SAFETY ONLY, NOT conservation status:
+  Very High — actively attacks / kills humans  (tiger, elephant, crocodile, king cobra)
+  High      — serious injury if threatened     (sloth bear, leopard, Indian gaur, wild boar)
+  Caution   — minor injury possible            (monitor lizard, Indian python, deer, wild dog)
+  Low       — negligible human danger          (tortoise, turtle, small bird, most fish)
 
-  A turtle, tortoise, or other aquatic reptile is ALWAYS "Low".
-  An Endangered or Critically Endangered status does NOT raise risk_level.
+  A turtle or tortoise is ALWAYS "Low".
+  Endangered / Critically Endangered conservation status does NOT raise risk_level.
+  risk_level must be exactly one of the four strings above.
 
-Rules:
-- safety_guidelines    : minimum 4, maximum 8. Field officer RESPONSE protocols
-                         for an active encounter or sighting. Species-specific SOPs.
-- precaution_guidelines: minimum 4, maximum 8. Preventive operational procedures
-                         — patrol protocols, area restriction recommendations,
-                         community advisory requirements, equipment.
-- Be species-specific. Reference known behaviour and Indian forest law obligations
-  (Wildlife Protection Act 1972) where relevant.
-- risk_level must be ONE of the exact strings given above.
-- Do not add any text outside the JSON object.
+Do not add any text outside the JSON object.
 """
 
 
@@ -203,23 +184,30 @@ async def get_species_safety_data(
                 {"role": "system", "content": _SAFETY_SYSTEM_PROMPT},
                 {"role": "user",   "content": user_content},
             ],
-            max_completion_tokens=1024,
+            max_completion_tokens=2048,
         )
         raw = completion.choices[0].message.content or "{}"
         # Extract the JSON object robustly — strip markdown fences if present
         import re as _re
         m = _re.search(r"\{.*\}", raw, _re.DOTALL)
         if not m:
-            raise ValueError(f"No JSON object found in GPT response: {raw[:200]!r}")
+            logger.warning(
+                "[reporter] No JSON found in GPT response for %r: %.200s",
+                scientific_name, raw,
+            )
+            raise ValueError("no_json_in_response")
         result = json.loads(m.group(0))
-        if not result.get("safety_guidelines") and not result.get("risk_level"):
-            raise ValueError(f"GPT returned empty safety object: {result}")
+        if not result.get("user_safety_precautions") and not result.get("risk_level"):
+            logger.warning(
+                "[reporter] GPT returned empty safety object for %r: %r",
+                scientific_name, result,
+            )
+            raise ValueError("empty_safety_result")
         logger.info(
-            "[reporter] Safety data generated for %r: risk=%s guidelines=%d precautions=%d",
+            "[reporter] Safety data generated for %r: risk=%s precautions=%d",
             scientific_name,
             result.get("risk_level"),
-            len(result.get("safety_guidelines") or []),
-            len(result.get("precaution_guidelines") or []),
+            len(result.get("user_safety_precautions") or []),
         )
         return result
     except Exception as exc:
@@ -227,20 +215,15 @@ async def get_species_safety_data(
             "[reporter] Safety GPT call failed for %r: %s", scientific_name, exc, exc_info=True
         )
         return {
-            "safety_guidelines": [
-                "Establish a safe observation perimeter; do not approach the animal.",
-                "Notify the Range Forest Officer and Wildlife Warden immediately.",
-                "Document the sighting with GPS coordinates, photographs, and time.",
-                "Do not attempt capture, translocation, or deterrence without DFO authorisation.",
+            "user_safety_precautions": [
+                "Move away calmly — do not run or make sudden movements.",
+                "Keep a safe distance of at least 50 metres from the animal.",
+                "Do not attempt to feed, corner, or interact with the animal in any way.",
+                "Alert the nearest forest ranger or wildlife warden immediately.",
+                "If in immediate danger, make loud noise and back away slowly.",
+                "Do not return to the area until cleared by forest department personnel.",
             ],
-            "precaution_guidelines": [
-                "Issue area advisory to local communities and patrol teams.",
-                "Increase patrol frequency in the reported zone for 72 hours.",
-                "Check for signs of human-wildlife conflict (crop damage, livestock loss).",
-                "Coordinate with nearest veterinary office if animal appears injured.",
-            ],
-            "risk_level":       "Low",
-            "emergency_action": "Secure the area, notify the Wildlife Warden, and await authorised response team.",
+            "risk_level": "Low",
         }
 
 
@@ -297,7 +280,7 @@ def _detail_table(
     s_value,
     colors,
     col_widths: Optional[list] = None,
-) -> "Table":
+) -> Any:
     """Reusable two-column label/value table."""
     from reportlab.platypus import Paragraph, Table, TableStyle
     cw = col_widths or [4.5, 12.5]
@@ -466,12 +449,11 @@ def _build_pdf(report_data: dict[str, Any]) -> bytes:
                 logger.warning("[reporter] ReportLab image error: %s", exc)
 
     taxo_rows = [
-        ["Scientific Name",   f"{scientific_name}"],
-        ["Common Name(s)",     common_name_str or "—"],
-        ["Genus",              genus],
-        ["Family",             family],
-        ["IUCN Red List",      iucn_cat],
-        ["Confidence Score",   f"{confidence * 100:.0f}%" if confidence else "—"],
+        ["Scientific Name",      f"{scientific_name}"],
+        ["Common Name(s)",        common_name_str or "—"],
+        ["Genus",                 genus],
+        ["Family",                family],
+        ["IUCN Red List",         iucn_cat],
         ["Identification Method", id_source],
     ]
     story.append(_detail_table(taxo_rows, s_label, s_value, colors))
@@ -502,9 +484,8 @@ def _build_pdf(report_data: dict[str, Any]) -> bytes:
     story.append(Paragraph("Threat and Risk Assessment", s_section))
     story.append(HRFlowable(width="100%", thickness=1, color=MID_GREEN, spaceAfter=4))
 
-    risk_level       = report_data.get("risk_level")       or "—"
-    threat_level     = report_data.get("threat_level")     or "—"
-    emergency_action = report_data.get("emergency_action") or "—"
+    risk_level   = report_data.get("risk_level")   or "—"
+    threat_level = report_data.get("threat_level") or "—"
 
     # 3-cell summary row
     def _risk_cell(label: str, value: str, bg_colour) -> list:
@@ -534,35 +515,19 @@ def _build_pdf(report_data: dict[str, Any]) -> bytes:
         style=TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]),
     )
     story.append(risk_summary)
-    story.append(Spacer(1, 6))
-    story.append(Paragraph(
-        f"<b>Immediate Action Required:</b> {emergency_action}", s_value
-    ))
+    story.append(Spacer(1, 8))
 
-    # ── Officer Response Protocols ────────────────────────────────────────────
-    safety = report_data.get("safety_guidelines") or []
-    if safety:
-        story.append(Paragraph("Officer Response Protocols", s_section))
+    # ── Safety Precautions (user-facing) ─────────────────────────────────────
+    user_precautions = report_data.get("user_safety_precautions") or []
+    if user_precautions:
+        story.append(Paragraph("Safety Precautions", s_section))
         story.append(HRFlowable(width="100%", thickness=1, color=MID_GREEN, spaceAfter=4))
         story.append(Paragraph(
-            "The following protocols apply for field officers responding to this incident:",
+            "The following safety precautions are recommended for anyone in the vicinity of this sighting:",
             s_italic,
         ))
         story.append(Spacer(1, 4))
-        for i, item in enumerate(safety, 1):
-            story.append(Paragraph(f"{i}.\xa0\xa0{item}", s_bullet))
-
-    # ── Standard Operating Procedures ────────────────────────────────────────
-    precautions = report_data.get("precaution_guidelines") or []
-    if precautions:
-        story.append(Paragraph("Standard Operating Procedures", s_section))
-        story.append(HRFlowable(width="100%", thickness=1, color=MID_GREEN, spaceAfter=4))
-        story.append(Paragraph(
-            "Preventive operational measures to be implemented in the affected zone:",
-            s_italic,
-        ))
-        story.append(Spacer(1, 4))
-        for i, item in enumerate(precautions, 1):
+        for i, item in enumerate(user_precautions, 1):
             story.append(Paragraph(f"{i}.\xa0\xa0{item}", s_bullet))
 
     # ── Footer ────────────────────────────────────────────────────────────────
@@ -679,12 +644,20 @@ class ReporterAgent:
         # never from GPT, which confuses conservation status with human danger.
         threat_level_val = _threat_level_from_iucn(iucn_data)
 
-        # ── Severity from text_agent ──────────────────────────────────────────
-        text_severity   = (text_data.get("severity") or "low") if isinstance(text_data, dict) else "low"
-        incident_severity = _map_severity(text_severity)
+        # ── Severity: from text_agent if present, else infer from human risk level ──
+        text_severity = (text_data.get("severity") or "") if isinstance(text_data, dict) else ""
+        if text_severity:
+            incident_severity = _map_severity(text_severity)
+        else:
+            # No user text — infer severity from the human risk level returned by GPT
+            _risk_to_sev = {"very high": "critical", "high": "high", "caution": "medium"}
+            _inferred_sev = _risk_to_sev.get((safety_data.get("risk_level") or "").lower(), "low")
+            incident_severity = _map_severity(_inferred_sev)
 
         # ── Assemble PDF data dict ────────────────────────────────────────────
         # Genus/family: prefer SpeciesNet image result, fall back to IUCN taxonomy
+        # iucn_taxon_field accepts short aliases (genus, family) and resolves to
+        # the actual blob key names (genus_name, family_name).
         iucn_raw   = iucn_data or {}
         genus_val  = image_data.get("genus")  or iucn_taxon_field(iucn_raw, "genus")
         family_val = image_data.get("family") or iucn_taxon_field(iucn_raw, "family")
@@ -712,13 +685,11 @@ class ReporterAgent:
                 "formatted":      loc_data.get("formatted"),
             },
             # IUCN fields for risk section
-            "red_list_category":    iucn_red_list_category(iucn_data or {}),
+            "red_list_category":       iucn_red_list_category(iucn_data or {}),
             # Safety GPT fields
-            "safety_guidelines":     safety_data.get("safety_guidelines") or [],
-            "precaution_guidelines": safety_data.get("precaution_guidelines") or [],
-            "risk_level":            safety_data.get("risk_level"),
-            "threat_level":          threat_level_val,
-            "emergency_action":      safety_data.get("emergency_action"),
+            "user_safety_precautions": safety_data.get("user_safety_precautions") or [],
+            "risk_level":              safety_data.get("risk_level"),
+            "threat_level":            threat_level_val,
         }
 
         # ── Generate PDF (sync, run in thread) ───────────────────────────────
@@ -789,11 +760,9 @@ class ReporterAgent:
             "red_list_category":     iucn_red_list_category(iucn_data or {}),
             "red_list_code":         iucn_red_list_code(iucn_data or {}),
             # Safety
-            "risk_level":            safety_data.get("risk_level"),
-            "threat_level":          threat_level_val,
-            "emergency_action":      safety_data.get("emergency_action"),
-            "safety_guidelines":     safety_data.get("safety_guidelines") or [],
-            "precaution_guidelines": safety_data.get("precaution_guidelines") or [],
+            "risk_level":              safety_data.get("risk_level"),
+            "threat_level":            threat_level_val,
+            "user_safety_precautions": safety_data.get("user_safety_precautions") or [],
             # Incident
             "severity":  incident_severity.value,
             "location":  pdf_data["location"],

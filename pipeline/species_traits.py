@@ -92,6 +92,9 @@ def _safe_get(d: Any, *keys: str, default: Any = None) -> Any:
 
 def _wiki_extract(name: str) -> str:
     """Return the plain-text Wikipedia extract for *name*, or 'Not found'."""
+    words = name.split()
+    preview = " ".join(words[:2]) + (" ..." if len(words) > 2 else "")
+    logger.info("[_wiki_extract] called with: %s", preview)
     try:
         search = _http_session.get(
             "https://en.wikipedia.org/w/api.php",
@@ -249,7 +252,14 @@ def run_pipeline(scientific_name: str) -> dict[str, Any]:
 
     taxon: dict = iucn_data.get("taxon") or {}
     inaturalist_name = taxon.get("scientific_name", scientific_name)
-    wiki_name = inaturalist_name.replace(" ", "_")
+
+    # ── Resolve Wikipedia search name ─────────────────────────────────────────
+    # Prefer the first main common name (e.g. "Tiger") — Wikipedia articles are
+    # titled by common name so this gives the most reliable opensearch match.
+    # Fall back to the plain scientific name (spaces intact) if none is present.
+    common_names = taxon.get("common_names") or []
+    main_names = [c["name"] for c in common_names if c.get("main")]
+    wiki_name = main_names[0] if main_names else inaturalist_name
 
     # ── Concurrent I/O: Wikipedia + iNaturalist (2 threads) ──────────────────
     with ThreadPoolExecutor(max_workers=2) as ex:
@@ -257,10 +267,6 @@ def run_pipeline(scientific_name: str) -> dict[str, Any]:
         photo_future = ex.submit(_inaturalist_photo, inaturalist_name)
         wiki_text = wiki_future.result()
         photo_url, photo_credit = photo_future.result()
-
-    # ── Build enriched payload ────────────────────────────────────────────────
-    common_names = taxon.get("common_names") or []
-    main_names = [c["name"] for c in common_names if c.get("main")]
 
     payload: dict[str, Any] = {
         "assessment_id"  : iucn_data.get("assessment_id"),
