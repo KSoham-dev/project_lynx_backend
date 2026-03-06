@@ -32,7 +32,7 @@ import logging
 from typing import Any, Optional
 
 from agents.layer0.receiver import AgentRequest
-from agents.layer2.iucn_fetcher import iucn_red_list_category, iucn_scientific_name
+from agents.layer2.iucn_fetcher import iucn_red_list_category, iucn_scientific_name, is_iucn_not_found
 from agents.layer2.inaturalist import get_inaturalist_photo
 from agents.layer2.species_cache import read_species_cache, write_species_cache
 
@@ -52,9 +52,14 @@ _GPT_TRAIT_FIELDS = (
 )
 
 
-async def _get_gpt_traits(scientific_name: str) -> dict[str, Any]:
+async def _get_gpt_traits(
+    scientific_name: str,
+    iucn_data: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
     """
     Fetch GPT-enriched traits from cache, or run the Groq pipeline.
+    Passes iucn_data to run_pipeline when provided so it skips the blob fetch
+    (needed when the data came from the live IUCN API rather than blob storage).
     Always non-fatal — returns {} on any failure.
     """
     cached = await read_species_cache("traits", scientific_name)
@@ -64,7 +69,7 @@ async def _get_gpt_traits(scientific_name: str) -> dict[str, Any]:
     try:
         from pipeline.species_traits import run_pipeline
         logger.info("[explorer] Running Groq traits pipeline for %r", scientific_name)
-        traits = await asyncio.to_thread(run_pipeline, scientific_name)
+        traits = await asyncio.to_thread(run_pipeline, scientific_name, iucn_data)
         logger.info("[explorer] Groq traits done: %d fields", len(traits))
         await write_species_cache("traits", scientific_name, traits)
         return traits
@@ -93,6 +98,13 @@ class ExplorerAgent:
         -------
         Merged exploration dict.
         """
+        if is_iucn_not_found(iucn_data):
+            logger.warning(
+                "[explorer] Species not in any database: %r",
+                iucn_data.get("scientific_name"),
+            )
+            return {"message": iucn_data["message"]}
+
         if not iucn_data:
             logger.warning("[explorer] No IUCN data — cannot enrich")
             return {"error": "Could not identify species from the provided input."}
@@ -105,9 +117,11 @@ class ExplorerAgent:
             scientific_name,
         )
 
-        # Run both enrichment sources concurrently
+        # Run both enrichment sources concurrently.
+        # Pass iucn_data so the traits pipeline skips blob storage when the
+        # data was sourced from the live IUCN API fallback.
         gpt_traits, (photo_url, photo_credit) = await asyncio.gather(
-            _get_gpt_traits(scientific_name),
+            _get_gpt_traits(scientific_name, iucn_data),
             get_inaturalist_photo(scientific_name),
         )
 

@@ -30,7 +30,7 @@ import logging
 from typing import Any, Optional
 
 from agents.layer0.receiver import AgentRequest
-from agents.layer2.iucn_fetcher import iucn_red_list_category, iucn_scientific_name
+from agents.layer2.iucn_fetcher import iucn_red_list_category, iucn_scientific_name, is_iucn_not_found
 from agents.layer2.inaturalist import get_inaturalist_photo
 
 logger = logging.getLogger(__name__)
@@ -56,6 +56,13 @@ class EncyclopediaAgent:
         -------
         dict with IUCN fields + photo_url + photo_credit
         """
+        if is_iucn_not_found(iucn_data):
+            logger.warning(
+                "[encyclopedia] Species not in any database: %r",
+                iucn_data.get("scientific_name"),
+            )
+            return {"message": iucn_data["message"]}
+
         if not iucn_data:
             # Species Info Agent could not identify or fetch the species.
             # Surface a clear error rather than an empty dict.

@@ -31,6 +31,11 @@ def _extract_iucn_fields(raw: dict[str, Any]) -> dict[str, Any]:
 def iucn_scientific_name(raw: dict[str, Any]) -> str:
     return ((raw.get("taxon") or {}).get("scientific_name") or "").strip()
 
+
+def is_iucn_not_found(iucn_data: Any) -> bool:
+    """Return True when SpeciesInfoAgent signalled the species is absent from all databases."""
+    return bool((iucn_data or {}).get("_not_in_database"))
+
 def iucn_common_names(raw: dict[str, Any]) -> list[str]:
     entries = (raw.get("taxon") or {}).get("common_names") or []
     return [c["name"] for c in entries if c.get("main")]
@@ -78,6 +83,25 @@ def iucn_habitat_names(raw: dict[str, Any], limit: int = 4) -> list[str]:
         for h in (raw.get("habitats") or [])[:limit]
         if (h.get("description") or {}).get("en")
     ]
+
+
+def iucn_rationale(raw: dict[str, Any]) -> str:
+    """Return the first non-empty paragraph of the IUCN rationale in English."""
+    rationale = raw.get("rationale") or {}
+    # The field may be a plain string or a {"en": "...", ...} dict
+    if isinstance(rationale, str):
+        text = rationale
+    else:
+        text = (rationale.get("en") or "").strip()
+    if not text:
+        return ""
+    # Split on blank lines or <br> tags; return the first non-empty paragraph
+    import re
+    paragraphs = [p.strip() for p in re.split(r'<br\s*/?>', text, flags=re.IGNORECASE)]
+    # Also try double-newline split if no <br> tags
+    if len(paragraphs) == 1:
+        paragraphs = [p.strip() for p in text.split("\n\n")]
+    return next((p for p in paragraphs if p), text)
 
 
 async def get_iucn_raw(scientific_name: str) -> dict[str, Any]:

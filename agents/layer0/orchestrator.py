@@ -421,6 +421,23 @@ async def run_orchestrator(request: AgentRequest) -> tuple[str, dict[str, Any]]:
         list(tool_results.keys()),
     )
 
+    # ── is_relevant gate ──────────────────────────────────────────────────────
+    # If the image analysis ran and flagged the image as non-relevant, AND
+    # the user provided no text message to fall back on, skip Layer 2 entirely
+    # and return a friendly retry prompt.
+    image_result: dict = tool_results.get("analyse_image") or {}
+    if isinstance(image_result, dict) and image_result.get("is_relevant") is False and not request.message:
+        logger.info(
+            "[orchestrator] Image not relevant and no message — skipping Layer 2. "
+            "session=%s", request.session_id,
+        )
+        return "", {
+            "message": (
+                "We couldn't detect any animal in your image. "
+                "Please retake the photo with the animal clearly visible and try again."
+            )
+        }
+
     # ── 5. Layer 2 — LLM-routed via second call (traced in LangSmith) ────────
     structured_data = await _route_layer2_via_llm(llm, request, tool_results)
 

@@ -10,6 +10,7 @@ import uvicorn
 
 from pipeline.species_traits import run_pipeline
 from agents.layer0.router import router as agent_router
+from agents.layer0.stats_router import router as stats_router
 from agents.state.cosmos_client import close_cosmos_clients
 from agents.layer1.image_agent import set_speciesnet_model
 
@@ -62,6 +63,7 @@ app = FastAPI(
 
 # ── Agent router (Layer 0: Orchestrator + Context/State) ───────────────────────
 app.include_router(agent_router)
+app.include_router(stats_router)
 
 
 # ── Request / Response schemas ─────────────────────────────────────────────────

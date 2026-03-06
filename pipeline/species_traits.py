@@ -226,12 +226,23 @@ def _call_groq(payload: dict[str, Any]) -> dict[str, Any]:
 
 # ── Public entry point ──────────────────────────────────────────────────────────
 
-def run_pipeline(scientific_name: str) -> dict[str, Any]:
+def run_pipeline(
+    scientific_name: str,
+    iucn_data: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """
     Full synchronous pipeline for one scientific name.
 
     Returns a merged dict containing IUCN fields, photo URL/credit,
     and LLM-extracted traits.
+
+    Parameters
+    ----------
+    scientific_name:
+        Scientific name, e.g. "Panthera tigris".
+    iucn_data:
+        Pre-fetched IUCN dict (e.g. from the live IUCN API fallback).  When
+        provided the Azure Blob fetch is skipped entirely.
 
     Results are cached in-process for 24 hours — cache is thread-safe.
     FastAPI runs plain `def` routes in a thread-pool executor automatically,
@@ -246,27 +257,39 @@ def run_pipeline(scientific_name: str) -> dict[str, Any]:
         logger.info("Cache hit for %r", scientific_name)
         return cached
 
-    # ── Blob fetch ────────────────────────────────────────────────────────────
-    normalized = _normalize(scientific_name.strip())
-    iucn_data = _fetch_blob(normalized)
+    # ── Blob fetch (skipped when caller already has the data) ─────────────────
+    caller_supplied = iucn_data is not None
+    if not caller_supplied:
+        normalized = _normalize(scientific_name.strip())
+        iucn_data = _fetch_blob(normalized)
 
     taxon: dict = iucn_data.get("taxon") or {}
     inaturalist_name = taxon.get("scientific_name", scientific_name)
 
-    # ── Resolve Wikipedia search name ─────────────────────────────────────────
-    # Prefer the first main common name (e.g. "Tiger") — Wikipedia articles are
-    # titled by common name so this gives the most reliable opensearch match.
-    # Fall back to the plain scientific name (spaces intact) if none is present.
     common_names = taxon.get("common_names") or []
     main_names = [c["name"] for c in common_names if c.get("main")]
-    wiki_name = main_names[0] if main_names else inaturalist_name
 
-    # ── Concurrent I/O: Wikipedia + iNaturalist (2 threads) ──────────────────
-    with ThreadPoolExecutor(max_workers=2) as ex:
-        wiki_future = ex.submit(_wiki_extract, wiki_name)
-        photo_future = ex.submit(_inaturalist_photo, inaturalist_name)
-        wiki_text = wiki_future.result()
-        photo_url, photo_credit = photo_future.result()
+    # ── Wikipedia fetch (only when blob was the source; skip when iucn_data was
+    #    pre-fetched by the caller, e.g. from the live IUCN API, to avoid an
+    #    extra 10-20 s blocking call in the hot path) ──────────────────────────
+    wiki_text: str
+    photo_url: str | None = None
+    photo_credit: str | None = None
+
+    if not caller_supplied:
+        # iucn_data was fetched above from blob — also fetch wiki & inat photo
+        wiki_name = main_names[0] if main_names else inaturalist_name
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            wiki_future = ex.submit(_wiki_extract, wiki_name)
+            photo_future = ex.submit(_inaturalist_photo, inaturalist_name)
+            wiki_text = wiki_future.result()
+            photo_url, photo_credit = photo_future.result()
+    else:
+        # iucn_data was supplied by the caller; skip Wikipedia and iNaturalist
+        # to avoid the blocking network round-trips — ExplorerAgent already
+        # fetches the iNaturalist photo independently, and the IUCN assessment
+        # has sufficient context for the Groq trait extraction.
+        wiki_text = "Not fetched (pre-supplied IUCN data)"
 
     payload: dict[str, Any] = {
         "assessment_id"  : iucn_data.get("assessment_id"),
