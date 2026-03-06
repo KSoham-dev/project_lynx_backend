@@ -305,6 +305,122 @@ async def dev_traits_full_context(scientific_name: str = Query(...)):
     return result
 
 
+@app.get("/dev/traits/llm-input-explore", tags=["species_traits"])
+async def dev_traits_llm_input_explore(scientific_name: str = Query(...)):
+    """
+    Show the exact payload sent to the Groq LLM during an EXPLORE request.
+
+    Builds the full context (IUCN blob → Wikipedia extract → iNaturalist photo)
+    exactly as run_pipeline() would, and returns both the raw payload and a
+    human-readable summary of each section.  No Groq call is made — this is
+    purely for inspection.
+    """
+    from pipeline.species_traits import (
+        _normalize, _fetch_blob, _wiki_extract, _inaturalist_photo, _safe_get,
+        _SYSTEM_PROMPT, _USER_PROMPT_TEMPLATE,
+    )
+
+    try:
+        iucn_data = await asyncio.to_thread(_fetch_blob, _normalize(scientific_name))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    taxon = iucn_data.get("taxon") or {}
+    inaturalist_name = taxon.get("scientific_name", scientific_name)
+    common_names_raw = taxon.get("common_names") or []
+    main_names = [c["name"] for c in common_names_raw if c.get("main")]
+    wiki_name = main_names[0] if main_names else inaturalist_name
+
+    wiki_text, photo_pair = await asyncio.gather(
+        asyncio.to_thread(_wiki_extract, wiki_name),
+        asyncio.to_thread(_inaturalist_photo, inaturalist_name),
+    )
+    photo_url, photo_credit = photo_pair
+
+    payload = {
+        "assessment_id":   iucn_data.get("assessment_id"),
+        "year_published":  iucn_data.get("year_published"),
+        "scientific_name": taxon.get("scientific_name"),
+        "common_names":    main_names,
+        "category":        _safe_get(iucn_data, "red_list_category", "description", "en"),
+        "references":      iucn_data.get("references") or [],
+        "url":             iucn_data.get("url"),
+        "sis_taxon_id":    iucn_data.get("sis_taxon_id"),
+        "photo_url":       photo_url or "Not available",
+        "photo_credit":    photo_credit or "Not available",
+        "wiki_extract":    wiki_text,
+    }
+
+    rendered_user_prompt = _USER_PROMPT_TEMPLATE.format(payload=__import__("json").dumps(payload))
+
+    return {
+        "model":              "llama-3.3-70b-versatile (Groq)",
+        "system_prompt":      _SYSTEM_PROMPT,
+        "user_prompt":        rendered_user_prompt,
+        "payload":            payload,
+        "payload_sections": {
+            "iucn_fields":       {k: payload[k] for k in ("assessment_id", "year_published", "scientific_name", "common_names", "category", "url", "sis_taxon_id")},
+            "wiki_extract":      {"search_name_used": wiki_name, "length_chars": len(wiki_text), "preview": wiki_text[:500]},
+            "inaturalist_photo": {"photo_url": photo_url, "attribution": photo_credit},
+            "references_count":  len(payload["references"]),
+        },
+    }
+
+
+@app.get("/dev/traits/llm-input-encyclopedia", tags=["species_traits"])
+async def dev_traits_llm_input_encyclopedia(scientific_name: str = Query(...)):
+    """
+    Show the context used by the Encyclopedia agent.
+
+    Encyclopedia makes NO LLM call — it passes the raw IUCN blob directly to
+    the frontend.  This endpoint shows the complete IUCN data plus the
+    iNaturalist photo that will be included in the response, so you can verify
+    what the frontend will receive without running the full pipeline.
+    """
+    from agents.layer2.iucn_fetcher import (
+        iucn_scientific_name, iucn_common_names, iucn_taxon_field,
+        iucn_red_list_category, iucn_red_list_code, iucn_population_trend,
+        iucn_threat_titles, iucn_habitat_names,
+    )
+    from agents.layer2.inaturalist import get_inaturalist_photo
+
+    raw = await _fetch_raw(scientific_name)
+
+    photo_url, photo_credit = await get_inaturalist_photo(
+        iucn_scientific_name(raw) or scientific_name
+    )
+
+    return {
+        "note": "Encyclopedia agent makes NO LLM call. This is the full context passed to the frontend.",
+        "iucn_summary": {
+            "scientific_name":   iucn_scientific_name(raw),
+            "common_names":      iucn_common_names(raw),
+            "genus":             iucn_taxon_field(raw, "genus"),
+            "family":            iucn_taxon_field(raw, "family"),
+            "order":             iucn_taxon_field(raw, "order"),
+            "class":             iucn_taxon_field(raw, "class"),
+            "kingdom":           iucn_taxon_field(raw, "kingdom"),
+            "phylum":            iucn_taxon_field(raw, "phylum"),
+            "red_list_category": iucn_red_list_category(raw),
+            "red_list_code":     iucn_red_list_code(raw),
+            "population_trend":  iucn_population_trend(raw),
+            "top_threats":       iucn_threat_titles(raw, 6),
+            "habitats":          iucn_habitat_names(raw, 6),
+            "iucn_url":          raw.get("url"),
+            "assessment_id":     raw.get("assessment_id"),
+            "year_published":    raw.get("year_published"),
+            "total_keys":        len(raw),
+        },
+        "inaturalist_photo": {
+            "photo_url":   photo_url,
+            "attribution": photo_credit,
+        },
+        "full_iucn_raw": raw,
+    }
+
+
 # ── Reporter / Assessment endpoints ───────────────────────────────────────────
 
 @app.get("/dev/reporter/threat-level", tags=["reporter"])

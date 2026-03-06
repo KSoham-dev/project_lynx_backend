@@ -6,12 +6,13 @@ Layer 2 — Reporter Agent  (query_type = report)
 Responsibilities
 ----------------
 1. get_species_safety_data()  [public, reusable by other agents]
-      GPT-5-mini call that returns:
-        - safety_guidelines     (minimum 4 actionable items)
-        - precaution_guidelines (minimum 4 actionable items)
-        - risk_level            (Very High | High | Caution | Low)
-        - threat_level          (Critical | High | Moderate | Low)
-        - emergency_action      (single most-important immediate step)
+      Single Azure OpenAI GPT call that returns:
+        - user_safety_precautions  (4–6 plain-language actionable items)
+        - risk_level               (Very High | High | Caution | Low)
+        - length                   (e.g. "120-190 cm")
+        - lifespan_years           (e.g. "10-15 Years")
+      Note: threat_level is derived deterministically from the IUCN red list
+      code via _threat_level_from_iucn() — no GPT call needed for this.
 
 2. _generate_pdf_report()  [private]
       ReportLab A4 PDF with:
@@ -52,6 +53,7 @@ from agents.layer2.iucn_fetcher import (
     iucn_common_names,
     iucn_habitat_names,
     iucn_population_trend,
+    iucn_rationale,
     iucn_red_list_category,
     iucn_red_list_code,
     iucn_scientific_name,
@@ -88,7 +90,9 @@ Return ONLY valid JSON — no markdown fences, no extra text — with this exact
     "...",
     "..."
   ],
-  "risk_level": "Very High | High | Caution | Low"
+  "risk_level": "Very High | High | Caution | Low",
+  "length": "<min>-<max> <unit>",
+  "lifespan_years": "<min>-<max> Years"
 }
 
 user_safety_precautions: 4–6 clear, actionable items written for a non-expert.
@@ -107,6 +111,12 @@ risk_level — HUMAN SAFETY ONLY, NOT conservation status:
   A turtle or tortoise is ALWAYS "Low".
   Endangered / Critically Endangered conservation status does NOT raise risk_level.
   risk_level must be exactly one of the four strings above.
+
+length: typical body length as a numeric range with unit, e.g. "120-190 cm" or "30-50 cm".
+  Use the most authoritative published range. Unit must be cm or m.
+
+lifespan_years: typical wild lifespan as a numeric range, e.g. "10-15 Years".
+  Always capitalise "Years". If only a single well-known value exists, repeat it: "20-20 Years".
 
 Do not add any text outside the JSON object.
 """
@@ -635,10 +645,22 @@ class ReporterAgent:
             request.session_id, scientific_name, report_id,
         )
 
-        # ── Fetch safety data (GPT — human risk level + guidelines only) ────────
+        # ── Fetch safety data + iNaturalist photo concurrently ──────────────────
+        from agents.layer2.inaturalist import get_inaturalist_photo
+
         safety_data: dict[str, Any] = {}
+        inaturalist_photo_url: Optional[str] = None
+        inaturalist_photo_credit: Optional[str] = None
+
         if scientific_name.lower() not in ("unknown", "unidentified"):
-            safety_data = await get_species_safety_data(scientific_name, iucn_data)
+            safety_task = get_species_safety_data(scientific_name, iucn_data)
+            # Use the primary IUCN common name for the iNaturalist lookup so the
+            # photo result is more recognisable to end users (e.g. "Tiger" rather
+            # than "Panthera tigris").  Fall back to scientific name if absent.
+            photo_task  = get_inaturalist_photo(scientific_name)
+            (safety_data, (inaturalist_photo_url, inaturalist_photo_credit)) = await asyncio.gather(
+                safety_task, photo_task
+            )
 
         # threat_level is derived deterministically from IUCN red list code —
         # never from GPT, which confuses conservation status with human danger.
@@ -728,6 +750,7 @@ class ReporterAgent:
                 "protected_area": loc_data.get("protected_area"),
                 "formatted":      loc_data.get("formatted"),
             },
+            "image_url": inaturalist_photo_url or request.image_url or image_data.get("image_url"),
             "animal_traits": {
                 "size":      text_data.get("size")      if isinstance(text_data, dict) else None,
                 "colour":    text_data.get("colour")    if isinstance(text_data, dict) else None,
@@ -759,14 +782,23 @@ class ReporterAgent:
             # IUCN
             "red_list_category":     iucn_red_list_category(iucn_data or {}),
             "red_list_code":         iucn_red_list_code(iucn_data or {}),
+            "population_trend":      iucn_population_trend(iucn_data or {}),
+            "rationale":             iucn_rationale(iucn_data or {}),
             # Safety
             "risk_level":              safety_data.get("risk_level"),
             "threat_level":            threat_level_val,
             "user_safety_precautions": safety_data.get("user_safety_precautions") or [],
+            # Physical traits
+            "length":         safety_data.get("length"),
+            "lifespan_years": safety_data.get("lifespan_years"),
             # Incident
             "severity":  incident_severity.value,
             "location":  pdf_data["location"],
             "message":   request.message,
+            "image_url": inaturalist_photo_url or request.image_url or image_data.get("image_url"),
+            # Source links
+            "iucn_url":                  (iucn_data or {}).get("url"),
+            "inaturalist_photo_credit":  inaturalist_photo_credit,
         }
         logger.info("[reporter] DONE: report_id=%s pdf_url=%s", report_id, pdf_url)
         return response

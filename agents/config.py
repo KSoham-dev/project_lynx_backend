@@ -39,6 +39,9 @@ class SharedSettings(BaseSettings):
     cosmos_data_connection_string: str = ""
     cosmos_data_database: str = "prahari-data"
 
+    # ── IUCN Red List API v4 ──────────────────────────────────────────────────
+    iucn_api_key: str = ""
+
 
 @lru_cache(maxsize=1)
 def get_shared_settings() -> SharedSettings:

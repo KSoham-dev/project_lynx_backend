@@ -683,6 +683,48 @@
       cursor: pointer;
     }
     select:focus { border-color: var(--purple); }
+
+    /* ─── Output check panel ─────────────────────────────────────────────────── */
+    .check-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+      gap: 5px;
+      padding: 12px 14px;
+    }
+
+    .check-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 7px;
+      font-size: 12px;
+      padding: 5px 8px;
+      border-radius: 5px;
+      background: var(--surface2);
+    }
+
+    .check-icon {
+      font-size: 12px;
+      flex-shrink: 0;
+      line-height: 1.6;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .check-icon.pass { color: var(--green); }
+    .check-icon.fail { color: var(--red); }
+    .check-icon.warn { color: var(--amber); }
+
+    .check-label { flex: 1; line-height: 1.5; color: var(--text-dim); }
+
+    .check-summary {
+      font-size: 11px;
+      padding: 6px 14px 10px;
+      border-top: 1px solid var(--border);
+      color: var(--text-muted);
+    }
+
+    .check-summary .cs-pass { color: var(--green);  font-weight: 600; }
+    .check-summary .cs-fail { color: var(--red);    font-weight: 600; }
+    .check-summary .cs-warn { color: var(--amber);  font-weight: 600; }
   </style>
 </head>
 <body>
@@ -970,6 +1012,28 @@
         { name: 'scientific_name', label: 'Scientific Name', type: 'text', required: true, placeholder: 'e.g. Panthera tigris' },
       ],
     },
+    {
+      id: 'traits_llm_input_explore',
+      name: 'llm_input_explore',
+      module: 'species_traits',
+      desc: 'Show the exact payload and prompts sent to Groq during an EXPLORE request: IUCN fields, Wikipedia extract (with search name), iNaturalist photo, system prompt, and fully-rendered user prompt. No Groq call is made — inspection only.',
+      method: 'GET',
+      url: '/dev/traits/llm-input-explore',
+      params: [
+        { name: 'scientific_name', label: 'Scientific Name', type: 'text', required: true, placeholder: 'e.g. Panthera tigris' },
+      ],
+    },
+    {
+      id: 'traits_llm_input_encyclopedia',
+      name: 'llm_input_encyclopedia',
+      module: 'species_traits',
+      desc: 'Show the full context used by the Encyclopedia agent. No LLM call is made — displays the complete IUCN blob summary and iNaturalist photo that will be passed directly to the frontend.',
+      method: 'GET',
+      url: '/dev/traits/llm-input-encyclopedia',
+      params: [
+        { name: 'scientific_name', label: 'Scientific Name', type: 'text', required: true, placeholder: 'e.g. Panthera tigris' },
+      ],
+    },
 
     // ── Reporter / Assessment ──
     {
@@ -987,7 +1051,7 @@
       id: 'reporter_safety',
       name: 'get_species_safety_data',
       module: 'reporter',
-      desc: 'Call Azure OpenAI GPT to generate user-facing safety precautions and the human risk level for a species. Returns user_safety_precautions (plain-language items shown to the reporter) and risk_level. This is the exact call the reporter agent makes.',
+      desc: 'Call Azure OpenAI GPT to generate user-facing safety precautions and the human risk level for a species. Now also returns length (e.g. "120-190 cm") and lifespan_years (e.g. "10-15 Years"). This is the exact call the reporter agent makes.',
       method: 'GET',
       url: '/dev/reporter/safety-data',
       params: [
@@ -1107,6 +1171,207 @@
       ],
     },
   ];
+
+  // ─── Output checks registry ────────────────────────────────────────────────
+  const _IUCN_CODES    = new Set(['EX','EW','CR','EN','VU','NT','LC','DD','NE','RE','NA']);
+  const _IUCN_CATS     = new Set(['Extinct','Extinct In The Wild','Critically Endangered','Endangered','Vulnerable','Near Threatened','Least Concern','Data Deficient','Not Evaluated','Regionally Extinct']);
+  const _RISK_LVLS     = new Set(['very high','high','caution','low']);
+  const _THREAT_LVLS   = new Set(['Critical','High','Moderate','Low','Unknown']);
+  const _SEV_LVLS      = new Set(['CRITICAL','HIGH','MEDIUM','LOW']);
+
+  const CHECKS = {
+    'iucn_get_raw': [
+      { label: 'taxon object present',              pass: d => !!d.taxon },
+      { label: 'red_list_category key present',     pass: d => !!d.red_list_category },
+      { label: 'assessment_id present',             pass: d => !!d.assessment_id },
+      { label: 'year_published present',            pass: d => !!d.year_published, warn: true },
+    ],
+    'iucn_sci_name': [
+      { label: 'result is non-empty string',        pass: d => typeof d.result === 'string' && d.result.length > 0 },
+      { label: 'result contains genus + species',   pass: d => typeof d.result === 'string' && d.result.includes(' '), warn: true },
+    ],
+    'iucn_common_names': [
+      { label: 'result is array',                   pass: d => Array.isArray(d.result) },
+      { label: 'at least one common name',          pass: d => Array.isArray(d.result) && d.result.length > 0, warn: true },
+    ],
+    'iucn_taxon_field': [
+      { label: 'result is non-null',                pass: d => d.result != null },
+    ],
+    'iucn_rl_cat': [
+      { label: 'result is non-empty',               pass: d => typeof d.result === 'string' && d.result.length > 0 },
+      { label: 'result is a known IUCN category',   pass: d => _IUCN_CATS.has(d.result), warn: true },
+    ],
+    'iucn_rl_code': [
+      { label: 'result is non-empty',               pass: d => typeof d.result === 'string' && d.result.length > 0 },
+      { label: 'result is a valid IUCN code',       pass: d => _IUCN_CODES.has(d.result), warn: true },
+    ],
+    'iucn_pop_trend': [
+      { label: 'result is non-empty',               pass: d => typeof d.result === 'string' && d.result.length > 0 },
+    ],
+    'iucn_threats': [
+      { label: 'result is array',                   pass: d => Array.isArray(d.result) },
+      { label: 'at least one threat listed',        pass: d => Array.isArray(d.result) && d.result.length > 0, warn: true },
+    ],
+    'iucn_habitats': [
+      { label: 'result is array',                   pass: d => Array.isArray(d.result) },
+      { label: 'at least one habitat listed',       pass: d => Array.isArray(d.result) && d.result.length > 0, warn: true },
+    ],
+    'iucn_taxonomy': [
+      { label: 'scientific_name present',           pass: d => !!d.scientific_name },
+      { label: 'genus present',                     pass: d => !!d.genus },
+      { label: 'family present',                    pass: d => !!d.family },
+      { label: 'order present',                     pass: d => !!d.order },
+      { label: 'class present',                     pass: d => !!d.class },
+      { label: 'kingdom present',                   pass: d => !!d.kingdom },
+      { label: 'common_names non-empty',            pass: d => Array.isArray(d.common_names) && d.common_names.length > 0, warn: true },
+    ],
+    'traits_normalize': [
+      { label: 'result is non-empty',               pass: d => typeof d.result === 'string' && d.result.length > 0 },
+      { label: 'result contains no spaces',         pass: d => typeof d.result === 'string' && !d.result.includes(' ') },
+    ],
+    'traits_wiki': [
+      { label: 'result is non-empty',               pass: d => typeof d.result === 'string' && d.result.length > 0 },
+      { label: 'Wikipedia article found',           pass: d => typeof d.result === 'string' && !d.result.startsWith('Not found'), warn: true },
+      { label: 'extract has content (>200 chars)',  pass: d => typeof d.result === 'string' && d.result.length > 200, warn: true },
+    ],
+    'traits_photo': [
+      { label: 'photo_url present',                 pass: d => !!d.photo_url, warn: true },
+      { label: 'photo_url is http(s) URL',          pass: d => typeof d.photo_url === 'string' && d.photo_url.startsWith('http'), warn: true },
+      { label: 'attribution present',               pass: d => !!d.attribution, warn: true },
+    ],
+    'traits_blob': [
+      { label: 'taxon object present',              pass: d => !!d.taxon },
+      { label: 'red_list_category key present',     pass: d => !!d.red_list_category },
+      { label: 'assessment_id present',             pass: d => !!d.assessment_id },
+    ],
+    'traits_groq': [
+      { label: 'lifespan_years present',            pass: d => !!d.lifespan_years },
+      { label: 'mass present',                      pass: d => !!d.mass },
+      { label: 'length present',                    pass: d => !!d.length },
+      { label: 'short_description non-empty',       pass: d => typeof d.short_description === 'string' && d.short_description.length > 20 },
+      { label: 'human_risk_level present',          pass: d => !!d.human_risk_level },
+      { label: 'fun_fact_1 present',                pass: d => !!d.fun_fact_1 },
+      { label: 'fun_fact_2 present',                pass: d => !!d.fun_fact_2, warn: true },
+      { label: 'fun_fact_3 present',                pass: d => !!d.fun_fact_3, warn: true },
+    ],
+    'traits_pipeline': [
+      { label: 'scientific_name present',           pass: d => !!d.scientific_name },
+      { label: 'lifespan_years present',            pass: d => !!d.lifespan_years },
+      { label: 'mass present',                      pass: d => !!d.mass },
+      { label: 'length present',                    pass: d => !!d.length },
+      { label: 'short_description present',         pass: d => !!d.short_description },
+      { label: 'photo_url present',                 pass: d => !!d.photo_url, warn: true },
+      { label: 'fun_fact_1 present',                pass: d => !!d.fun_fact_1 },
+    ],
+    'traits_full_context': [
+      { label: 'iucn_summary returned',             pass: d => !!d.iucn_summary },
+      { label: 'iucn scientific_name populated',    pass: d => !!(d.iucn_summary || {}).scientific_name },
+      { label: 'wikipedia extract present',         pass: d => !!(d.wikipedia || {}).extract && (d.wikipedia.extract || '') !== 'Not found', warn: true },
+      { label: 'iNaturalist photo found',           pass: d => !!(d.inaturalist_photo || {}).photo_url, warn: true },
+      { label: 'groq lifespan_years present',       pass: d => !!(d.groq_traits || {}).lifespan_years },
+      { label: 'groq length present',               pass: d => !!(d.groq_traits || {}).length },
+      { label: 'groq short_description present',    pass: d => !!(d.groq_traits || {}).short_description },
+      { label: 'no groq_error returned',            pass: d => !d.groq_error },
+      { label: 'forwarded_result has scientific_name', pass: d => !!(d.forwarded_result || {}).scientific_name },
+    ],
+    'traits_llm_input_explore': [
+      { label: 'model name present',               pass: d => !!d.model },
+      { label: 'system_prompt present',            pass: d => typeof d.system_prompt === 'string' && d.system_prompt.length > 50 },
+      { label: 'user_prompt rendered',             pass: d => typeof d.user_prompt === 'string' && d.user_prompt.length > 20 },
+      { label: 'payload.scientific_name present',  pass: d => !!(d.payload || {}).scientific_name },
+      { label: 'payload.category present',         pass: d => !!(d.payload || {}).category },
+      { label: 'wiki_extract non-empty',           pass: d => typeof ((d.payload || {}).wiki_extract) === 'string' && (d.payload.wiki_extract || '') !== 'Not found', warn: true },
+      { label: 'wiki extract >200 chars',          pass: d => ((d.payload || {}).wiki_extract || '').length > 200, warn: true },
+      { label: 'iNaturalist photo found',          pass: d => !!(d.payload_sections || {}).inaturalist_photo?.photo_url, warn: true },
+      { label: 'references_count >= 0',            pass: d => typeof (d.payload_sections || {}).references_count === 'number' },
+    ],
+    'traits_llm_input_encyclopedia': [
+      { label: 'iucn_summary present',             pass: d => !!d.iucn_summary },
+      { label: 'scientific_name populated',        pass: d => !!(d.iucn_summary || {}).scientific_name },
+      { label: 'red_list_category present',        pass: d => !!(d.iucn_summary || {}).red_list_category },
+      { label: 'iNaturalist photo found',          pass: d => !!(d.inaturalist_photo || {}).photo_url, warn: true },
+      { label: 'full_iucn_raw present',            pass: d => !!d.full_iucn_raw && Object.keys(d.full_iucn_raw).length > 0 },
+      { label: 'no LLM calls (note field present)',pass: d => !!d.note },
+    ],
+    'reporter_threat': [
+      { label: 'threat_level present',              pass: d => !!d.threat_level },
+      { label: 'threat_level is valid',             pass: d => _THREAT_LVLS.has(d.threat_level) },
+      { label: 'red_list_code present',             pass: d => !!d.red_list_code },
+      { label: 'red_list_category present',         pass: d => !!d.red_list_category },
+    ],
+    'reporter_safety': [
+      { label: 'risk_level present',                pass: d => !!d.risk_level },
+      { label: 'risk_level is valid',               pass: d => _RISK_LVLS.has((d.risk_level || '').toLowerCase()) },
+      { label: 'safety precautions returned',       pass: d => Array.isArray(d.user_safety_precautions) && d.user_safety_precautions.length > 0 },
+      { label: '4+ precautions provided',           pass: d => Array.isArray(d.user_safety_precautions) && d.user_safety_precautions.length >= 4, warn: true },
+      { label: 'length field present',              pass: d => !!d.length },
+      { label: 'length has range format (X-Y unit)',pass: d => typeof d.length === 'string' && /\d.*-.*\d/.test(d.length), warn: true },
+      { label: 'lifespan_years present',            pass: d => !!d.lifespan_years },
+      { label: 'lifespan_years contains "Year"',    pass: d => typeof d.lifespan_years === 'string' && d.lifespan_years.includes('Year'), warn: true },
+    ],
+    'reporter_summary': [
+      { label: 'scientific_name present',           pass: d => !!d.scientific_name },
+      { label: 'genus present',                     pass: d => !!d.genus },
+      { label: 'family present',                    pass: d => !!d.family },
+      { label: 'order present',                     pass: d => !!d.order },
+      { label: 'class present',                     pass: d => !!d.class },
+      { label: 'kingdom present',                   pass: d => !!d.kingdom },
+      { label: 'red_list_code present',             pass: d => !!d.red_list_code },
+      { label: 'red_list_category present',         pass: d => !!d.red_list_category },
+      { label: 'threat_level is valid',             pass: d => _THREAT_LVLS.has(d.threat_level) },
+      { label: 'population_trend present',          pass: d => !!d.population_trend },
+    ],
+    'pipeline_tool_selection': [
+      { label: 'tools_selected is array',           pass: d => Array.isArray(d.tools_selected) },
+      { label: 'at least one tool selected',        pass: d => Array.isArray(d.tools_selected) && d.tools_selected.length > 0, warn: true },
+      { label: 'will_abort is boolean',             pass: d => typeof d.will_abort === 'boolean' },
+      { label: 'context_block_sent_to_llm present', pass: d => !!d.context_block_sent_to_llm },
+    ],
+    'pipeline_name_resolution': [
+      { label: 'resolved_name returned',            pass: d => d.resolved_name != null, warn: true },
+      { label: 'iucn_fetch_will_run is boolean',    pass: d => typeof d.iucn_fetch_will_run === 'boolean' },
+      { label: 'resolution_trace non-empty',        pass: d => Array.isArray(d.resolution_trace) && d.resolution_trace.length > 0 },
+      { label: 'priority_order specified',          pass: d => Array.isArray(d.priority_order) && d.priority_order.length > 0 },
+    ],
+    'pipeline_severity_chain': [
+      { label: 'incident_severity returned',        pass: d => !!d.incident_severity },
+      { label: 'incident_severity is valid',        pass: d => _SEV_LVLS.has(d.incident_severity) },
+      { label: 'branch_taken is valid',             pass: d => ['text_severity','risk_level_inference','default'].includes(d.branch_taken) },
+      { label: 'explanation present',               pass: d => !!d.explanation },
+    ],
+    'pipeline_layer1_parse': [
+      { label: 'analyse_image status returned',     pass: d => !!(d.analyse_image || {}).status },
+      { label: 'analyse_image no parse_error',      pass: d => (d.analyse_image || {}).status !== 'parse_error' },
+      { label: 'analyse_text no parse_error',       pass: d => (d.analyse_text || {}).status !== 'parse_error' },
+      { label: 'location_context no parse_error',   pass: d => (d.location_context || {}).status !== 'parse_error' },
+      { label: 'at least one tool parsed ok',       pass: d => ['analyse_image','analyse_text','location_context'].some(k => (d[k] || {}).status === 'ok'), warn: true },
+    ],
+    'pipeline_explorer_fields': [
+      { label: 'iucn_base scientific_name present', pass: d => !!(d.iucn_base || {}).scientific_name },
+      { label: 'groq_overlay_fields has 9 items',   pass: d => Array.isArray(d.groq_overlay_fields) && d.groq_overlay_fields.length === 9 },
+      { label: 'no field collisions with IUCN',     pass: d => ((d.collision_check || {}).collisions_found || 0) === 0, warn: true },
+    ],
+    'pipeline_species_cache': [
+      { label: 'iucn_cache document_id present',    pass: d => !!(d.iucn_cache || {}).document_id },
+      { label: 'traits_cache document_id present',  pass: d => !!(d.traits_cache || {}).document_id },
+      { label: 'iucn cache is HIT',                 pass: d => (d.iucn_cache || {}).hit === true, warn: true },
+      { label: 'traits cache is HIT',               pass: d => (d.traits_cache || {}).hit === true, warn: true },
+    ],
+    'pipeline_geocode': [
+      { label: 'location_context returned',         pass: d => !!d.location_context },
+      { label: 'country resolved',                  pass: d => !!(d.location_context || {}).country },
+      { label: 'state resolved',                    pass: d => !!(d.location_context || {}).state, warn: true },
+      { label: 'district resolved',                 pass: d => !!(d.location_context || {}).district, warn: true },
+      { label: 'geohash present',                   pass: d => !!(d.location_context || {}).geohash },
+      { label: 'formatted address present',         pass: d => !!(d.location_context || {}).formatted },
+    ],
+    'pipeline_data_handoff': [
+      { label: 'resolved_name present',             pass: d => !!d.resolved_name },
+      { label: 'species_info_agent_output not empty', pass: d => Object.keys(d.species_info_agent_output || {}).length > 0 },
+      { label: 'agent_field_map returned (no error)', pass: d => !(d.agent_field_map || {}).error },
+      { label: 'shared_iucn_data is true',          pass: d => d.shared_iucn_data === true },
+    ],
+  };
 
   // ─── Build sidebar ─────────────────────────────────────────────────────────
   const groupIucn     = document.getElementById('group-iucn');
@@ -1246,6 +1511,17 @@
           <span class="placeholder">Run the function to see output here.</span>
         </div>
       </div>
+
+      <!-- Output checks (populated after each run) -->
+      <div class="card" id="check-card" style="display:none">
+        <div class="card-header">
+          <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+            <path d="M2 7l3.5 3.5L12 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Output Checks
+        </div>
+        <div id="check-body"></div>
+      </div>
     `;
 
     // Enter key triggers run on text inputs
@@ -1339,12 +1615,24 @@
       if (currentFn.id === 'traits_full_context' && resp.ok) {
         body.classList.add('fc-layout');
         body.innerHTML = renderFullContext(data);
+      } else if (currentFn.id === 'reporter_safety' && resp.ok) {
+        body.classList.add('fc-layout');
+        body.innerHTML = renderSafetyData(data);
       } else if (currentFn.id === 'pipeline_data_handoff' && resp.ok) {
         body.classList.add('fc-layout');
         body.innerHTML = renderPipelineCheck(data);
       } else {
         body.classList.remove('fc-layout');
         body.innerHTML = syntaxHighlight(JSON.stringify(data, null, 2));
+      }
+
+      // Output checks
+      const _checks = CHECKS[currentFn.id];
+      if (_checks && resp.ok) {
+        renderChecks(_checks, data);
+      } else {
+        const cc = document.getElementById('check-card');
+        if (cc) cc.style.display = 'none';
       }
 
       // Photo preview
@@ -1379,6 +1667,8 @@
     elapsed.textContent = '';
     resultData = null;
     if (preview) preview.classList.remove('visible');
+    const checkCard = document.getElementById('check-card');
+    if (checkCard) checkCard.style.display = 'none';
   }
 
   function expandResult() {
@@ -1404,6 +1694,48 @@
         btn.style.color = btn.style.borderColor = '';
       }, 1600);
     });
+  }
+
+  // ─── Reporter safety data renderer ────────────────────────────────────────
+  function renderSafetyData(data) {
+    const riskColour = {
+      'very high': '#ef4444',
+      'high':      '#f97316',
+      'caution':   '#f59e0b',
+      'low':       '#10b981',
+    }[(data.risk_level || '').toLowerCase()] || '#94a3b8';
+
+    const precautions = (data.user_safety_precautions || []);
+    const precHtml = precautions.length
+      ? precautions.map((p, i) =>
+          `<div style="display:flex;gap:10px;padding:7px 0;border-bottom:1px solid var(--border)">
+             <span style="color:var(--accent);font-family:'JetBrains Mono',monospace;font-size:11px;min-width:18px">${i + 1}.</span>
+             <span style="font-size:12px;color:var(--text)">${esc(p)}</span>
+           </div>`
+        ).join('')
+      : `<span style="color:var(--text-muted);font-size:12px">None returned</span>`;
+
+    const metaCards = [
+      { label: 'Risk Level',     value: data.risk_level   || '—', colour: riskColour },
+      { label: 'Length',         value: data.length        || '—', colour: 'var(--blue)' },
+      { label: 'Lifespan',       value: data.lifespan_years || '—', colour: 'var(--teal)' },
+    ].map(c => `
+      <div style="background:var(--surface3);border:1px solid var(--border);border-radius:var(--radius);
+                  padding:12px 14px;display:flex;flex-direction:column;gap:4px">
+        <span style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">${esc(c.label)}</span>
+        <span style="font-size:15px;font-weight:600;color:${c.colour}">${esc(c.value)}</span>
+      </div>`
+    ).join('');
+
+    return `
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px">
+        ${metaCards}
+      </div>
+      <div class="fc-panel">
+        <div class="fc-panel-header" style="background:rgba(251,146,60,.12);color:#fbbf24">🛡 Safety Precautions</div>
+        <div class="fc-panel-body">${precHtml}</div>
+      </div>
+    `;
   }
 
   // ─── Full-context renderer ───────────────────────────────────────────────────
@@ -1595,6 +1927,41 @@
         </div>
       </div>
     `;
+  }
+
+  // ─── Output checks renderer ──────────────────────────────────────────────────
+  function renderChecks(checks, data) {
+    const rows = checks.map(c => {
+      let ok;
+      try { ok = c.pass(data); } catch { ok = false; }
+      const icon    = ok ? '✓' : (c.warn ? '⚠' : '✗');
+      const iconCls = ok ? 'pass' : (c.warn ? 'warn' : 'fail');
+      return { label: c.label, icon, iconCls, ok };
+    });
+
+    const passes = rows.filter(r => r.ok).length;
+    const fails  = rows.filter(r => !r.ok && r.iconCls === 'fail').length;
+    const warns  = rows.filter(r => !r.ok && r.iconCls === 'warn').length;
+
+    const rowsHtml = rows.map(r => `
+      <div class="check-row">
+        <span class="check-icon ${r.iconCls}">${r.icon}</span>
+        <span class="check-label">${esc(r.label)}</span>
+      </div>`).join('');
+
+    const card = document.getElementById('check-card');
+    if (!card) return;
+    card.style.display = '';
+    const hdr = card.querySelector('.card-header');
+    if (hdr) hdr.style.color = fails > 0 ? 'var(--red)' : warns > 0 ? 'var(--amber)' : 'var(--green)';
+    document.getElementById('check-body').innerHTML = `
+      <div class="check-grid">${rowsHtml}</div>
+      <div class="check-summary">
+        <span class="cs-pass">${passes} passed</span>
+        ${fails ? ` &middot; <span class="cs-fail">${fails} failed</span>` : ''}
+        ${warns ? ` &middot; <span class="cs-warn">${warns} warnings</span>` : ''}
+        &nbsp;&middot;&nbsp;<span style="color:var(--text-muted)">${rows.length} checks total</span>
+      </div>`;
   }
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
