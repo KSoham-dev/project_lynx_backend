@@ -55,6 +55,8 @@ async def chat(payload: ReceiverInput, request: Request) -> ChatResponse:
         agent_request = await run_receiver(payload, request)
         response_text, structured_data = await run_orchestrator(agent_request)
 
+    except HTTPException:
+        raise  # pass through HTTPException raised by agents (e.g. unidentified species)
     except ValueError as exc:
         logger.warning("Validation error: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc

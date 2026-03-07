@@ -217,6 +217,7 @@ class ImageAnalysisAgent:
             image_url=image_url,
             latitude=latitude,
             longitude=longitude,
+            error=identification.error,
         )
 
         # ── 6. Write to cache ─────────────────────────────────────────────────

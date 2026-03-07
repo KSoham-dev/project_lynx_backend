@@ -183,6 +183,10 @@
     .group-icon.traits  { background: rgba(16,185,129,.15); color: #6ee7b7; }
     .group-icon.reporter{ background: rgba(251,146,60,.15);  color: #fbbf24; }
     .group-icon.pipeline{ background: rgba(14,165,233,.15); color: #7dd3fc; }
+    .group-icon.speciesnet{ background: rgba(251,191,36,.14);  color: #fde68a; }
+    .group-icon.stats     { background: rgba(52,211,153,.14);   color: #6ee7b7; }
+
+    .mod-stats { background: rgba(52,211,153,.11); color: #6ee7b7; border: 1px solid rgba(52,211,153,.30); }
 
     .group-label-text {
       font-size: 10px;
@@ -335,7 +339,8 @@
     .mod-iucn     { background: rgba(99,102,241,.14); color: #a5b4fc; border: 1px solid rgba(99,102,241,.25); }
     .mod-traits   { background: rgba(16,185,129,.12); color: #6ee7b7; border: 1px solid rgba(16,185,129,.22); }
     .mod-reporter { background: rgba(251,146,60,.13);  color: #fbbf24; border: 1px solid rgba(251,146,60,.25); }
-    .mod-pipeline { background: rgba(14,165,233,.12); color: #7dd3fc; border: 1px solid rgba(14,165,233,.22); }
+    .mod-pipeline    { background: rgba(14,165,233,.12); color: #7dd3fc; border: 1px solid rgba(14,165,233,.22); }
+    .mod-speciesnet  { background: rgba(251,191,36,.11); color: #fde68a; border: 1px solid rgba(251,191,36,.30); }
 
     .fn-desc {
       color: var(--text-dim);
@@ -785,6 +790,22 @@
           <span class="fn-count" id="cnt-pipeline"></span>
         </div>
       </div>
+
+      <div id="group-speciesnet">
+        <div class="group-header" style="margin-top:4px">
+          <div class="group-icon speciesnet">⬡</div>
+          <span class="group-label-text">SpeciesNet</span>
+          <span class="fn-count" id="cnt-speciesnet"></span>
+        </div>
+      </div>
+
+      <div id="group-stats">
+        <div class="group-header" style="margin-top:4px">
+          <div class="group-icon stats">◈</div>
+          <span class="group-label-text">Stats API</span>
+          <span class="fn-count" id="cnt-stats"></span>
+        </div>
+      </div>
     </aside>
 
     <!-- Main panel -->
@@ -1170,6 +1191,123 @@
         { name: 'query_type',      label: 'Query Type',      type: 'select', required: true, options: ['explore','report','encyclopedia'], default: 'explore' },
       ],
     },
+
+    // ── SpeciesNet ──
+    {
+      id: 'speciesnet_parse_label',
+      name: '_parse_taxonomy',
+      module: 'speciesnet',
+      desc: 'Parse a raw SpeciesNet semicolon-delimited taxonomy label into its components (family, genus, scientific_name, common_name). Returns valid=false if the label is a bare detection token or has fewer than 3 parts.',
+      method: 'GET',
+      url: '/dev/speciesnet/parse-label',
+      params: [
+        { name: 'label', label: 'SpeciesNet Label', type: 'text', required: true,
+          placeholder: 'e.g. aa73e0ac;mammalia;carnivora;felidae;panthera;tigris;tiger' },
+      ],
+    },
+    {
+      id: 'speciesnet_routing_decision',
+      name: '_should_use_gpt',
+      module: 'speciesnet',
+      desc: 'Show the full GPT-fallback routing decision for a label+score pair. Reveals which of the 6 conditions triggered (no label, detection token, low confidence, unparsable genus/family, no scientific name, priority genus in top-3) and whether GPT vision would be called.',
+      method: 'GET',
+      url: '/dev/speciesnet/routing-decision',
+      params: [
+        { name: 'top_label', label: 'Top-1 Label',   type: 'text',   required: false,
+          placeholder: 'e.g. aa73e0ac;mammalia;carnivora;felidae;panthera;tigris;tiger' },
+        { name: 'top_score', label: 'Top-1 Score (0.0–1.0)', type: 'number', required: false, placeholder: '0.91', default: '0.0' },
+        { name: 'label_2',   label: 'Top-2 Label (optional)', type: 'text', required: false, placeholder: '' },
+        { name: 'label_3',   label: 'Top-3 Label (optional)', type: 'text', required: false, placeholder: '' },
+      ],
+    },
+    {
+      id: 'speciesnet_priority_genera',
+      name: 'PRIORITY_GENERA',
+      module: 'speciesnet',
+      desc: 'List every priority genus and family that always triggers GPT vision fallback (condition #2). When any of the top-3 SpeciesNet labels resolves to one of these genera, GPT is called regardless of confidence score.',
+      method: 'GET',
+      url: '/dev/speciesnet/priority-genera',
+      params: [],
+    },
+    {
+      id: 'speciesnet_check_genus',
+      name: 'check_genus',
+      module: 'speciesnet',
+      desc: 'Check whether a specific genus will trigger the GPT vision fallback condition #2. Returns the family it belongs to and a plain-English explanation.',
+      method: 'GET',
+      url: '/dev/speciesnet/check-genus',
+      params: [
+        { name: 'genus', label: 'Genus Name', type: 'text', required: true, placeholder: 'e.g. Panthera' },
+      ],
+    },
+    {
+      id: 'speciesnet_gpt_vision',
+      name: 'gpt_identify',
+      module: 'speciesnet',
+      desc: 'Call GPT-5-mini vision directly on a public image URL. Mirrors the exact gpt_identify() call made by the pipeline when SpeciesNet confidence is below threshold or a priority genus appears in top-3. Returns scientific_name, common_name, confidence, and source.',
+      method: 'GET',
+      url: '/dev/speciesnet/gpt-vision',
+      params: [
+        { name: 'image_url', label: 'Image URL', type: 'text', required: true,
+          placeholder: 'https://upload.wikimedia.org/…/Tiger.jpg' },
+      ],
+    },
+    {
+      id: 'speciesnet_relevancy',
+      name: 'check_relevancy',
+      module: 'speciesnet',
+      desc: 'Run the relevancy gate on a SpeciesNet prediction dict. Purely rule-based (detection label + confidence threshold) — no model needed. Supply a prediction object with detections and/or classifications.',
+      method: 'POST',
+      url: '/dev/speciesnet/relevancy',
+      params: [
+        { name: 'prediction', label: 'Prediction JSON', type: 'textarea', required: true,
+          placeholder: '{\n  "detections": [{"label": "animal", "conf": 0.92}],\n  "classifications": {\n    "classes": ["uuid;mammalia;carnivora;felidae;panthera;tigris;tiger"],\n    "scores": [0.91]\n  }\n}' },
+      ],
+      postBody: (params) => ({ prediction: JSON.parse(params.prediction), image_url: '' }),
+    },
+    {
+      id: 'speciesnet_identify',
+      name: 'identify_species',
+      module: 'speciesnet',
+      desc: 'Run two-stage species identification on a SpeciesNet prediction dict. Stage 1 is deterministic label parsing. Stage 2 (GPT vision) fires only when routing conditions are met — supply image_url for the GPT path.',
+      method: 'POST',
+      url: '/dev/speciesnet/identify',
+      params: [
+        { name: 'prediction', label: 'Prediction JSON', type: 'textarea', required: true,
+          placeholder: '{\n  "detections": [{"label": "animal", "conf": 0.95}],\n  "classifications": {\n    "classes": ["uuid;mammalia;carnivora;felidae;neofelis;nebulosa;clouded leopard"],\n    "scores": [0.87]\n  }\n}' },
+        { name: 'image_url', label: 'Image URL (needed if GPT fires)', type: 'text', required: false,
+          placeholder: 'https://…' },
+      ],
+      postBody: (params) => ({ prediction: JSON.parse(params.prediction), image_url: params.image_url || '' }),
+    },
+    {
+      id: 'speciesnet_full_analysis',
+      name: 'ImageAnalysisAgent.run',
+      module: 'speciesnet',
+      desc: 'Run the complete ImageAnalysisAgent pipeline (cache → SpeciesNet → relevancy → identifier). Requires the SpeciesNet model loaded in the same process — returns 503 otherwise. Use /dev/speciesnet/identify with a pre-built prediction dict as the model-free alternative.',
+      method: 'GET',
+      url: '/dev/speciesnet/full-analysis',
+      params: [
+        { name: 'image_url',  label: 'Image URL',  type: 'text',   required: true,  placeholder: 'https://…' },
+        { name: 'latitude',   label: 'Latitude',   type: 'number', required: false, placeholder: 'e.g. 29.53' },
+        { name: 'longitude',  label: 'Longitude',  type: 'number', required: false, placeholder: 'e.g. 79.05' },
+      ],
+    },
+
+    // ── Stats API ──
+    {
+      id: 'stats_reports',
+      name: 'get_report_stats',
+      module: 'stats',
+      desc: 'Fetch aggregated wildlife sighting statistics for a given GPS location and radius. Returns totals, unique_species list (one entry per species with sighting_count), recent_sightings (one card per species, most recent first), location breakdowns, and distribution dicts — exactly what the frontend homepage consumes.',
+      method: 'GET',
+      url: '/dev/stats/reports',
+      params: [
+        { name: 'latitude',  label: 'Latitude',          type: 'number', required: true,  placeholder: 'e.g. 25.21' },
+        { name: 'longitude', label: 'Longitude',         type: 'number', required: true,  placeholder: 'e.g. 84.99' },
+        { name: 'radius_km', label: 'Radius (km)',        type: 'number', required: false, placeholder: '50', default: '50' },
+      ],
+    },
   ];
 
   // ─── Output checks registry ────────────────────────────────────────────────
@@ -1371,13 +1509,88 @@
       { label: 'agent_field_map returned (no error)', pass: d => !(d.agent_field_map || {}).error },
       { label: 'shared_iucn_data is true',          pass: d => d.shared_iucn_data === true },
     ],
+    'speciesnet_parse_label': [
+      { label: 'input_label returned',              pass: d => !!d.input_label },
+      { label: 'valid field present',               pass: d => typeof d.valid === 'boolean' },
+      { label: 'genus present when valid',          pass: d => !d.valid || !!d.genus },
+      { label: 'scientific_name has two words when valid', pass: d => !d.valid || (typeof d.scientific_name === 'string' && d.scientific_name.split(' ').length === 2) },
+      { label: 'common_name present when valid',    pass: d => !d.valid || !!d.common_name, warn: true },
+      { label: 'family present when valid',         pass: d => !d.valid || !!d.family, warn: true },
+    ],
+    'speciesnet_routing_decision': [
+      { label: 'use_gpt field present',             pass: d => typeof d.use_gpt === 'boolean' },
+      { label: 'reason present',                    pass: d => typeof d.reason === 'string' && d.reason.length > 0 },
+      { label: 'confidence_threshold is 0.80',      pass: d => d.confidence_threshold === 0.80 },
+      { label: 'parsed_taxonomy present',           pass: d => !!d.parsed_taxonomy },
+      { label: 'inputs block present',              pass: d => !!d.inputs },
+    ],
+    'speciesnet_priority_genera': [
+      { label: 'by_family object present',          pass: d => !!d.by_family && Object.keys(d.by_family).length > 0 },
+      { label: 'flat_genera non-empty',             pass: d => Array.isArray(d.flat_genera) && d.flat_genera.length > 0 },
+      { label: 'total_genera > 0',                  pass: d => (d.total_genera || 0) > 0 },
+      { label: 'Panthera in flat_genera',           pass: d => Array.isArray(d.flat_genera) && d.flat_genera.includes('Panthera') },
+      { label: 'FELIDAE in by_family',              pass: d => !!(d.by_family || {}).FELIDAE },
+    ],
+    'speciesnet_check_genus': [
+      { label: 'genus field present',               pass: d => !!d.genus },
+      { label: 'is_priority is boolean',            pass: d => typeof d.is_priority === 'boolean' },
+      { label: 'will_trigger_gpt matches is_priority', pass: d => d.is_priority === d.will_trigger_gpt },
+      { label: 'reason present',                    pass: d => typeof d.reason === 'string' && d.reason.length > 0 },
+    ],
+    'speciesnet_gpt_vision': [
+      { label: 'scientific_name returned',          pass: d => !!d.scientific_name },
+      { label: 'scientific_name is not Unknown',    pass: d => d.scientific_name !== 'Unknown', warn: true },
+      { label: 'scientific_name has two words',     pass: d => typeof d.scientific_name === 'string' && d.scientific_name.split(' ').length === 2, warn: true },
+      { label: 'source is gpt (not gpt_error)',     pass: d => d.source === 'gpt' },
+      { label: 'common_name present',               pass: d => !!d.common_name, warn: true },
+    ],
+    'speciesnet_relevancy': [
+      { label: 'is_relevant field present',         pass: d => typeof d.is_relevant === 'boolean' },
+      { label: 'reason present',                    pass: d => typeof d.reason === 'string' && d.reason.length > 0 },
+    ],
+    'speciesnet_identify': [
+      { label: 'scientific_name returned',          pass: d => !!d.scientific_name },
+      { label: 'scientific_name is not Unknown',    pass: d => d.scientific_name !== 'Unknown', warn: true },
+      { label: 'confidence is number',              pass: d => typeof d.confidence === 'number' },
+      { label: 'source is model or gpt',            pass: d => ['model','gpt','gpt_error'].includes(d.source) },
+      { label: 'source is model (high conf path)',  pass: d => d.source === 'model', warn: true },
+      { label: 'top_label_raw present (model path)',pass: d => d.source !== 'model' || !!d.top_label_raw, warn: true },
+      { label: 'genus present',                     pass: d => !!d.genus, warn: true },
+    ],
+    'speciesnet_full_analysis': [
+      { label: 'is_relevant field present',         pass: d => typeof d.is_relevant === 'boolean' },
+      { label: 'image_url present',                 pass: d => !!d.image_url },
+      { label: 'relevancy_reason present',          pass: d => !!d.relevancy_reason },
+      { label: 'is_relevant is true',               pass: d => d.is_relevant === true, warn: true },
+      { label: 'scientific_name present when relevant', pass: d => !d.is_relevant || !!d.scientific_name, warn: true },
+      { label: 'confidence > 0 when model path',    pass: d => !d.is_relevant || (d.identification_source === 'gpt') || (d.confidence || 0) > 0, warn: true },
+    ],
+    'stats_reports': [
+      { label: 'total_reports is a number',                  pass: d => typeof d.total_reports === 'number' },
+      { label: 'total_wildlife_sightings is a number',       pass: d => typeof d.total_wildlife_sightings === 'number' },
+      { label: 'unique_species is array',                    pass: d => Array.isArray(d.unique_species) },
+      { label: 'at least one unique species',                pass: d => Array.isArray(d.unique_species) && d.unique_species.length > 0, warn: true },
+      { label: 'each species has scientific_name',           pass: d => (d.unique_species || []).every(s => !!s.scientific_name) },
+      { label: 'each species has sighting_count > 0',        pass: d => (d.unique_species || []).every(s => typeof s.sighting_count === 'number' && s.sighting_count > 0) },
+      { label: 'unique_species_count matches array length',  pass: d => d.unique_species_count === (d.unique_species || []).length },
+      { label: 'no duplicate species in unique_species',     pass: d => { const names = (d.unique_species || []).map(s => s.scientific_name); return names.length === new Set(names).size; } },
+      { label: 'recent_sightings is array',                  pass: d => Array.isArray(d.recent_sightings) },
+      { label: 'no duplicate species in recent_sightings',   pass: d => { const names = (d.recent_sightings || []).map(s => s.scientific_name); return names.length === new Set(names).size; } },
+      { label: 'each recent sighting has sighting_count',    pass: d => (d.recent_sightings || []).every(s => typeof s.sighting_count === 'number') },
+      { label: 'sightings_by_state is non-empty',            pass: d => Array.isArray(d.sightings_by_state) && d.sightings_by_state.length > 0, warn: true },
+      { label: 'risk_level_distribution present',            pass: d => !!d.risk_level_distribution && Object.keys(d.risk_level_distribution).length > 0, warn: true },
+      { label: 'severity_distribution present',              pass: d => !!d.severity_distribution && Object.keys(d.severity_distribution).length > 0, warn: true },
+      { label: 'reports_last_7_days <= total_reports',       pass: d => (d.reports_last_7_days || 0) <= d.total_reports },
+    ],
   };
 
   // ─── Build sidebar ─────────────────────────────────────────────────────────
   const groupIucn     = document.getElementById('group-iucn');
   const groupTraits   = document.getElementById('group-traits');
   const groupReporter  = document.getElementById('group-reporter');
-  const groupPipeline  = document.getElementById('group-pipeline');
+  const groupPipeline   = document.getElementById('group-pipeline');
+  const groupSpeciesnet = document.getElementById('group-speciesnet');
+  const groupStats      = document.getElementById('group-stats');
 
   FUNCTIONS.forEach(fn => {
     const el = document.createElement('div');
@@ -1393,6 +1606,8 @@
     const target = fn.module === 'iucn_fetcher' ? groupIucn
                  : fn.module === 'reporter'      ? groupReporter
                  : fn.module === 'pipeline'      ? groupPipeline
+                 : fn.module === 'speciesnet'    ? groupSpeciesnet
+                 : fn.module === 'stats'         ? groupStats
                  : groupTraits;
     target.appendChild(el);
   });
@@ -1403,11 +1618,15 @@
     const iucnVisible     = [...groupIucn.querySelectorAll('.fn-item:not(.hidden)')].length;
     const traitsVisible   = [...groupTraits.querySelectorAll('.fn-item:not(.hidden)')].length;
     const reporterVisible = [...groupReporter.querySelectorAll('.fn-item:not(.hidden)')].length;
-    const pipelineVisible = [...groupPipeline.querySelectorAll('.fn-item:not(.hidden)')].length;
-    document.getElementById('cnt-iucn').textContent     = iucnVisible;
-    document.getElementById('cnt-traits').textContent   = traitsVisible;
-    document.getElementById('cnt-reporter').textContent = reporterVisible;
-    document.getElementById('cnt-pipeline').textContent = pipelineVisible;
+    const pipelineVisible   = [...groupPipeline.querySelectorAll('.fn-item:not(.hidden)')].length;
+    const speciesnetVisible = [...groupSpeciesnet.querySelectorAll('.fn-item:not(.hidden)')].length;
+    const statsVisible      = [...groupStats.querySelectorAll('.fn-item:not(.hidden)')].length;
+    document.getElementById('cnt-iucn').textContent        = iucnVisible;
+    document.getElementById('cnt-traits').textContent      = traitsVisible;
+    document.getElementById('cnt-reporter').textContent    = reporterVisible;
+    document.getElementById('cnt-pipeline').textContent    = pipelineVisible;
+    document.getElementById('cnt-speciesnet').textContent  = speciesnetVisible;
+    document.getElementById('cnt-stats').textContent       = statsVisible;
   }
 
   // ─── Sidebar filter ─────────────────────────────────────────────────────────
@@ -1443,6 +1662,8 @@
     const modClass = currentFn.module === 'iucn_fetcher' ? 'mod-iucn'
                    : currentFn.module === 'reporter'      ? 'mod-reporter'
                    : currentFn.module === 'pipeline'      ? 'mod-pipeline'
+                   : currentFn.module === 'speciesnet'    ? 'mod-speciesnet'
+                   : currentFn.module === 'stats'         ? 'mod-stats'
                    : 'mod-traits';
 
     view.innerHTML = `
@@ -1642,6 +1863,16 @@
         document.getElementById('photo-url-txt').textContent  = data.photo_url  ?? '—';
         document.getElementById('photo-attr-txt').textContent = data.attribution ?? '—';
         preview.classList.toggle('visible', !!data.photo_url);
+      }
+
+      // GPT vision: show the submitted image as a preview
+      if (currentFn.id === 'speciesnet_gpt_vision' && resp.ok && data.image_url) {
+        const preview = document.getElementById('photo-preview');
+        document.getElementById('photo-img').src              = data.image_url;
+        document.getElementById('photo-url-txt').textContent  = data.image_url;
+        document.getElementById('photo-attr-txt').textContent =
+          data.scientific_name ? `${data.scientific_name}${data.common_name ? ' · ' + data.common_name : ''}` : '—';
+        preview.classList.add('visible');
       }
 
     } catch (err) {

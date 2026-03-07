@@ -26,6 +26,7 @@ class IdentificationResult(BaseModel):
     family: Optional[str] = None          # e.g. "FELIDAE"
     genus: Optional[str] = None           # e.g. "Panthera"
     common_name: Optional[str] = None     # e.g. "leopard" (from SpeciesNet label)
+    error: Optional[str] = None           # error message when source="gpt_error"
 
 
 class ImageAnalysisResult(BaseModel):
@@ -44,3 +45,4 @@ class ImageAnalysisResult(BaseModel):
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     cached: bool = False
+    error: Optional[str] = None           # propagated from IdentificationResult when source="gpt_error"

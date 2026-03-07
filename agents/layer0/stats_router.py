@@ -14,11 +14,12 @@ reports container so the Cosmos index stays simple.
 from __future__ import annotations
 
 import logging
+import math
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from agents.state.containers import DataContainers
@@ -30,6 +31,13 @@ router = APIRouter(prefix="/stats", tags=["Stats"])
 
 
 # ── Response models ───────────────────────────────────────────────────────────
+
+class UniqueSpecies(BaseModel):
+    scientific_name: str
+    common_name: Optional[str] = None
+    sighting_count: int
+    red_list_category: Optional[str] = None
+
 
 class SpeciesSighting(BaseModel):
     scientific_name: str
@@ -63,6 +71,7 @@ class RecentSighting(BaseModel):
     district: Optional[str] = None
     created_at: Optional[str] = None
     image_url: Optional[str] = None
+    sighting_count: int = 1    # total sightings of this species in the radius
 
 
 class ReportStatsResponse(BaseModel):
@@ -74,7 +83,7 @@ class ReportStatsResponse(BaseModel):
     reports_last_30_days: int
 
     # ── Species breakdown ─────────────────────────────────────────────────────
-    top_species: list[SpeciesSighting]              # top-10 most sighted species
+    unique_species: list[UniqueSpecies]             # all distinct species in radius, sorted by sighting count
     unique_species_count: int
 
     # ── Location breakdowns ───────────────────────────────────────────────────
@@ -90,6 +99,9 @@ class ReportStatsResponse(BaseModel):
 
     # ── Recent activity feed ──────────────────────────────────────────────────
     recent_sightings: list[RecentSighting]          # 10 most recent reports
+
+    # ── Global top sighted ───────────────────────────────────────────────────
+    top_sighted_species: Optional[UniqueSpecies] = None   # #1 species across entire database
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -114,15 +126,32 @@ def _location(doc: dict) -> dict:
     return doc.get("location") or {}
 
 
+_EARTH_RADIUS_KM = 6_371.0
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in kilometres between two GPS coordinates."""
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
+    return _EARTH_RADIUS_KM * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
 # ── Route ─────────────────────────────────────────────────────────────────────
 
 @router.get("/reports", response_model=ReportStatsResponse)
-async def get_report_stats() -> ReportStatsResponse:
+async def get_report_stats(
+    latitude:  float = Query(..., description="Centre latitude for radius filter (decimal degrees)."),
+    longitude: float = Query(..., description="Centre longitude for radius filter (decimal degrees)."),
+    radius_km: float = Query(50.0, ge=1.0, le=2000.0, description="Radius in kilometres. Only sightings within this circle are included."),
+) -> ReportStatsResponse:
     """
-    Aggregate statistics across all wildlife sighting reports.
+    Aggregate statistics for wildlife sighting reports within a given radius.
 
-    Returns totals, breakdowns by species / location / risk, and a
-    recent-activity feed — everything the frontend homepage needs in one call.
+    The frontend must supply the user's current GPS location and a radius.
+    Only reports whose stored ``location.latitude`` / ``location.longitude``
+    fall within ``radius_km`` of the given centre are included in all counts,
+    distributions, and the recent-activity feed.
     """
     try:
         container = await get_data_container(DataContainers.REPORTS)
@@ -134,11 +163,29 @@ async def get_report_stats() -> ReportStatsResponse:
         logger.error("Stats: failed to query reports container: %s", exc)
         raise HTTPException(status_code=503, detail="Could not fetch report data.") from exc
 
+    # ── Radius filter ─────────────────────────────────────────────────────────
+    filtered_docs: list[dict] = []
+    for doc in raw_docs:
+        loc = _location(doc)
+        doc_lat = loc.get("latitude")
+        doc_lon = loc.get("longitude")
+        if doc_lat is None or doc_lon is None:
+            continue  # exclude sightings with no GPS data
+        if _haversine_km(latitude, longitude, doc_lat, doc_lon) <= radius_km:
+            filtered_docs.append(doc)
+
+    logger.info(
+        "Stats: %d/%d docs within %.1f km of (%.4f, %.4f)",
+        len(filtered_docs), len(raw_docs), radius_km, latitude, longitude,
+    )
+    all_docs = raw_docs          # full unfiltered set — used for global top species
+    raw_docs = filtered_docs
+
     now = _utcnow()
     cutoff_7d  = now - timedelta(days=7)
     cutoff_30d = now - timedelta(days=30)
 
-    total = len(raw_docs)
+    total = len(all_docs)        # total reports across entire database (not radius-filtered)
     count_7d  = 0
     count_30d = 0
 
@@ -164,9 +211,13 @@ async def get_report_stats() -> ReportStatsResponse:
                 count_30d += 1
             dated_docs.append((created, doc))
 
-        # Species
-        sname = (doc.get("scientific_name") or "").strip()
-        if sname:
+        # Species — normalise to "Genus species" (title-case genus, lower epithet)
+        # so "panthera leo", "Panthera Leo", and "Panthera leo" all collapse to
+        # the same key and appear as a single species on the frontend.
+        raw_sname = (doc.get("scientific_name") or "").strip()
+        if raw_sname:
+            parts = raw_sname.split()
+            sname = (parts[0].capitalize() + " " + " ".join(p.lower() for p in parts[1:])).strip() if len(parts) >= 2 else raw_sname.capitalize()
             species_counter[sname] += 1
             if sname not in species_meta:
                 species_meta[sname] = {
@@ -200,15 +251,15 @@ async def get_report_stats() -> ReportStatsResponse:
         if stat:
             status_counter[stat] += 1
 
-    # ── Top species ───────────────────────────────────────────────────────────
-    top_species = [
-        SpeciesSighting(
+    # ── Unique species in radius (all, sorted by sighting count desc) ──────────
+    unique_species = [
+        UniqueSpecies(
             scientific_name=name,
             common_name=species_meta[name]["common_name"],
-            count=cnt,
+            sighting_count=cnt,
             red_list_category=species_meta[name]["red_list_category"],
         )
-        for name, cnt in species_counter.most_common(10)
+        for name, cnt in species_counter.most_common()  # no limit — all unique species
     ]
 
     # ── Location stats ────────────────────────────────────────────────────────
@@ -225,15 +276,24 @@ async def get_report_stats() -> ReportStatsResponse:
         for p, c in protected_counter.most_common(10)
     ]
 
-    # ── Recent activity (10 newest) ───────────────────────────────────────────
+    # ── Recent activity — one card per unique species, most recent sighting ──
+    # dated_docs is already sorted newest-first; iterating in order means the
+    # first time we see a species key it is always the most recent occurrence.
     dated_docs.sort(key=lambda x: x[0], reverse=True)
-    recent_sightings = []
-    for _, doc in dated_docs[:10]:
+    recent_sightings: list[RecentSighting] = []
+    seen_species: set[str] = set()
+    for _, doc in dated_docs:
+        raw = (doc.get("scientific_name") or "").strip()
+        parts = raw.split()
+        key = (parts[0].capitalize() + " " + " ".join(p.lower() for p in parts[1:])).strip() if len(parts) >= 2 else raw.capitalize()
+        if key in seen_species:
+            continue  # already have a card for this species
+        seen_species.add(key)
         loc = _location(doc)
         recent_sightings.append(
             RecentSighting(
                 report_id=doc.get("id", ""),
-                scientific_name=doc.get("scientific_name"),
+                scientific_name=key or None,
                 common_name=doc.get("common_name"),
                 red_list_category=doc.get("red_list_category"),
                 risk_level=doc.get("risk_level"),
@@ -245,7 +305,33 @@ async def get_report_stats() -> ReportStatsResponse:
                 district=loc.get("district"),
                 created_at=doc.get("created_at"),
                 image_url=doc.get("image_url"),
+                sighting_count=species_counter.get(key, 1),
             )
+        )
+
+    # ── Global top sighted species (whole database, ignores radius) ───────────
+    global_species_counter: Counter[str] = Counter()
+    global_species_meta: dict[str, dict] = {}
+    for doc in all_docs:
+        raw_sname = (doc.get("scientific_name") or "").strip()
+        if raw_sname:
+            parts = raw_sname.split()
+            sname = (parts[0].capitalize() + " " + " ".join(p.lower() for p in parts[1:])).strip() if len(parts) >= 2 else raw_sname.capitalize()
+            global_species_counter[sname] += 1
+            if sname not in global_species_meta:
+                global_species_meta[sname] = {
+                    "common_name":       doc.get("common_name"),
+                    "red_list_category": doc.get("red_list_category"),
+                }
+
+    top_sighted_species: Optional[UniqueSpecies] = None
+    if global_species_counter:
+        top_name, top_count = global_species_counter.most_common(1)[0]
+        top_sighted_species = UniqueSpecies(
+            scientific_name=top_name,
+            common_name=global_species_meta[top_name]["common_name"],
+            sighting_count=top_count,
+            red_list_category=global_species_meta[top_name]["red_list_category"],
         )
 
     return ReportStatsResponse(
@@ -254,7 +340,7 @@ async def get_report_stats() -> ReportStatsResponse:
         total_species_in_database=4677,
         reports_last_7_days=count_7d,
         reports_last_30_days=count_30d,
-        top_species=top_species,
+        unique_species=unique_species,
         unique_species_count=len(species_counter),
         sightings_by_state=sightings_by_state,
         sightings_by_district=sightings_by_district,
@@ -264,4 +350,5 @@ async def get_report_stats() -> ReportStatsResponse:
         severity_distribution=dict(severity_counter),
         status_distribution=dict(status_counter),
         recent_sightings=recent_sightings,
+        top_sighted_species=top_sighted_species,
     )

@@ -232,8 +232,10 @@ class IncidentDocument(BaseModel):
     longitude: Optional[float] = None
     location_context: Optional[dict[str, Any]] = None
     description: str = ""
+    animal_name: Optional[str] = None           # common name, or scientific name if absent
     linked_report_id: Optional[str] = None
     linked_sos_id: Optional[str] = None
+    log_blob_url: Optional[str] = None          # URL of the append-blob incident log
     status: IncidentStatus = IncidentStatus.OPEN
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
