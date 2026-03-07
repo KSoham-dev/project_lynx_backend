@@ -43,12 +43,14 @@ import asyncio
 import json
 import logging
 import os
+import re
 import uuid
 from io import BytesIO
 from typing import Any, Optional
 
 from agents.enums import IncidentSeverity, QueryType, ReportStatus
 from agents.layer0.receiver import AgentRequest
+from fastapi import HTTPException
 from agents.layer2.iucn_fetcher import (
     iucn_common_names,
     iucn_habitat_names,
@@ -187,14 +189,19 @@ async def get_species_safety_data(
             azure_endpoint=s.azure_openai_endpoint,
             api_key=s.azure_openai_api_key,
             api_version="2025-01-01-preview",
+            timeout=60.0,
         )
-        completion = await client.chat.completions.create(
-            model=s.azure_openai_deployment,
-            messages=[
-                {"role": "system", "content": _SAFETY_SYSTEM_PROMPT},
-                {"role": "user",   "content": user_content},
-            ],
-            max_completion_tokens=2048,
+        completion = await asyncio.wait_for(
+            client.chat.completions.create(
+                model=s.azure_openai_deployment,
+                messages=[
+                    {"role": "system", "content": _SAFETY_SYSTEM_PROMPT},
+                    {"role": "user",   "content": user_content},
+                ],
+                max_completion_tokens=2048,
+                response_format={"type": "json_object"},
+            ),
+            timeout=90.0,
         )
         raw = completion.choices[0].message.content or "{}"
         # Extract the JSON object robustly — strip markdown fences if present
@@ -558,7 +565,32 @@ def _build_pdf(report_data: dict[str, Any]) -> bytes:
 # 3.  Azure Blob Upload  (private)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _upload_pdf_sync(pdf_bytes: bytes, report_id: str) -> Optional[str]:
+def _pdf_blob_name(
+    report_id: str,
+    scientific_name: str,
+    risk_level: Optional[str],
+    threat_level: Optional[str],
+    fsm_id: str,
+) -> str:
+    """Build a sanitised PDF blob name in the format:
+    reportid_scientificname_risklevel_threatlevel_fsmid_timestamp.pdf
+    """
+    def _slug(s: str) -> str:
+        return re.sub(r"[^A-Za-z0-9]+", "-", (s or "unknown").strip()).strip("-")
+
+    from datetime import datetime, timezone
+    ts = datetime.now(tz=timezone.utc).strftime("%Y%m%d%H%M%S")
+    return "_".join([
+        report_id,
+        _slug(scientific_name),
+        _slug(risk_level or "unknown"),
+        _slug(threat_level or "unknown"),
+        _slug(fsm_id),
+        ts,
+    ]) + ".pdf"
+
+
+def _upload_pdf_sync(pdf_bytes: bytes, blob_name: str) -> Optional[str]:
     """
     Upload PDF bytes to Azure Blob Storage.
     Returns the blob URL on success, None on failure.
@@ -567,7 +599,6 @@ def _upload_pdf_sync(pdf_bytes: bytes, report_id: str) -> Optional[str]:
     from pipeline.species_traits import _build_blob_service_client  # reuse helper
 
     container_name = os.getenv("AZURE_REPORTS_CONTAINER_NAME", "report-pdfs")
-    blob_name = f"{report_id}.pdf"
 
     try:
         service = _build_blob_service_client()
@@ -583,13 +614,13 @@ def _upload_pdf_sync(pdf_bytes: bytes, report_id: str) -> Optional[str]:
         logger.info("[reporter] PDF uploaded: %s", url)
         return url
     except Exception as exc:
-        logger.error("[reporter] PDF upload failed for %s: %s", report_id, exc, exc_info=True)
+        logger.error("[reporter] PDF upload failed for %s: %s", blob_name, exc, exc_info=True)
         return None
 
 
-async def _upload_pdf_blob(pdf_bytes: bytes, report_id: str) -> Optional[str]:
+async def _upload_pdf_blob(pdf_bytes: bytes, blob_name: str) -> Optional[str]:
     """Async wrapper for PDF blob upload."""
-    return await asyncio.to_thread(_upload_pdf_sync, pdf_bytes, report_id)
+    return await asyncio.to_thread(_upload_pdf_sync, pdf_bytes, blob_name)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -636,6 +667,21 @@ class ReporterAgent:
             iucn_common_names(iucn_data or {})
             or ([image_data.get("common_name")] if image_data.get("common_name") else [])
         )
+
+        # Guard: if both scientific name and common name are unresolved, abort.
+        _sci_unknown = not scientific_name or scientific_name.lower() in ("unknown", "unidentified")
+        _common_unknown = not common_names or all(
+            not n or n.lower() in ("unknown", "unidentified") for n in common_names
+        )
+        if _sci_unknown and _common_unknown:
+            logger.warning(
+                "[reporter] Aborting — species could not be identified (scientific=%r, common_names=%r) session=%s",
+                scientific_name, common_names, request.session_id,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Species could not be identified — report not generated. Please retake the photo with the animal clearly visible and try again.",
+            )
 
         report_id    = str(uuid.uuid4())
         submitted_at = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -719,7 +765,14 @@ class ReporterAgent:
         try:
             pdf_bytes = await asyncio.to_thread(_build_pdf, pdf_data)
             logger.info("[reporter] PDF generated: %d bytes", len(pdf_bytes))
-            pdf_url = await _upload_pdf_blob(pdf_bytes, report_id)
+            blob_name = _pdf_blob_name(
+                report_id,
+                scientific_name,
+                safety_data.get("risk_level"),
+                threat_level_val,
+                request.user_id,
+            )
+            pdf_url = await _upload_pdf_blob(pdf_bytes, blob_name)
         except Exception as exc:
             logger.error("[reporter] PDF generation failed: %s", exc, exc_info=True)
 
@@ -801,6 +854,14 @@ class ReporterAgent:
             "inaturalist_photo_credit":  inaturalist_photo_credit,
         }
         logger.info("[reporter] DONE: report_id=%s pdf_url=%s", report_id, pdf_url)
+
+        # ── Trigger Incident Agent (log + notify) ─────────────────────────────
+        try:
+            from agents.layer2.incident_agent import IncidentAgent
+            await IncidentAgent().run(response, request)
+        except Exception as exc:
+            logger.error("[reporter] IncidentAgent.run failed: %s", exc, exc_info=True)
+
         return response
 
 

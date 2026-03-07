@@ -927,6 +927,279 @@ async def dev_pipeline_data_handoff(
     }
 
 
+# ── SpeciesNet endpoints ───────────────────────────────────────────────────────
+# These endpoints exercise every stage of the SpeciesNet → identification pipeline
+# without needing the SpeciesNet model loaded (except /dev/speciesnet/full-analysis).
+
+
+@app.get("/dev/speciesnet/parse-label", tags=["speciesnet"])
+async def dev_speciesnet_parse_label(label: str = Query(..., description="Raw SpeciesNet taxonomy label string")):
+    """
+    Parse a raw SpeciesNet taxonomy label into its taxonomy components.
+
+    SpeciesNet label format: "uuid;class;order;family;genus;epithet;common_name"
+    e.g.  "aa73e0ac;mammalia;carnivora;felidae;panthera;tigris;tiger"
+    → family="FELIDAE", genus="Panthera", scientific_name="Panthera tigris", common_name="tiger"
+    """
+    from agents.layer1.identifier import _parse_taxonomy
+    family, genus, scientific_name, common_name = _parse_taxonomy(label)
+    return {
+        "input_label":     label,
+        "family":          family,
+        "genus":           genus,
+        "scientific_name": scientific_name,
+        "common_name":     common_name,
+        "valid":           scientific_name is not None,
+        "note":            "valid=False means the label is a bare detection token (blank/animal/vehicle/…) or has fewer than 3 semicolon-parts",
+    }
+
+
+@app.get("/dev/speciesnet/routing-decision", tags=["speciesnet"])
+async def dev_speciesnet_routing_decision(
+    top_label: str  = Query("",  description="Top-1 SpeciesNet label string"),
+    top_score: float = Query(0.0, ge=0.0, le=1.0, description="Confidence score for top-1 label (0.0–1.0)"),
+    label_2:   str  = Query("",  description="Top-2 label (optional — used for priority genus scan)"),
+    label_3:   str  = Query("",  description="Top-3 label (optional — used for priority genus scan)"),
+):
+    """
+    Show the full GPT routing decision that identifier._should_use_gpt() would produce.
+
+    Returns which of the 6 conditions triggered (or none) and whether GPT vision
+    would be called instead of using the SpeciesNet label directly.
+
+    Conditions checked (first match wins):
+      #6 — no label at all
+      #5 — label is a bare detection token
+      #1 — confidence < 0.80
+      #3 — genus or family unparseable
+      #4 — no valid scientific name
+      #2 — priority genus in ANY of top-3 labels
+    """
+    from agents.layer1.identifier import _parse_taxonomy, _should_use_gpt, CONFIDENCE_THRESHOLD
+
+    all_labels = [lbl for lbl in [top_label, label_2, label_3] if lbl.strip()]
+    family, genus, scientific_name, common_name = _parse_taxonomy(top_label or "")
+    use_gpt, reason = _should_use_gpt(
+        top_label=top_label or None,
+        top_score=top_score,
+        family=family,
+        genus=genus,
+        scientific_name=scientific_name,
+        all_labels=all_labels,
+    )
+    return {
+        "use_gpt":             use_gpt,
+        "reason":              reason,
+        "confidence_threshold": CONFIDENCE_THRESHOLD,
+        "parsed_taxonomy": {
+            "family":          family,
+            "genus":           genus,
+            "scientific_name": scientific_name,
+            "common_name":     common_name,
+        },
+        "inputs": {
+            "top_label":        top_label or None,
+            "top_score":        top_score,
+            "all_labels_used":  all_labels,
+        },
+    }
+
+
+@app.get("/dev/speciesnet/priority-genera", tags=["speciesnet"])
+async def dev_speciesnet_priority_genera():
+    """
+    List every priority genus and family that triggers GPT vision fallback (condition #2).
+
+    When ANY of the top-3 SpeciesNet classification labels resolves to a genus
+    in this list, the identifier always routes to GPT vision regardless of score.
+    """
+    from agents.layer1.species_list import PRIORITY_SPECIES, PRIORITY_GENERA, PRIORITY_FAMILIES
+    return {
+        "total_genera":  len(PRIORITY_GENERA),
+        "total_families": len(PRIORITY_FAMILIES),
+        "by_family":     {fam: sorted(genera) for fam, genera in sorted(PRIORITY_SPECIES.items())},
+        "flat_genera":   sorted(PRIORITY_GENERA),
+    }
+
+
+@app.get("/dev/speciesnet/check-genus", tags=["speciesnet"])
+async def dev_speciesnet_check_genus(genus: str = Query(..., description="Genus name to check, e.g. Panthera")):
+    """
+    Check whether a genus will trigger the GPT vision fallback (priority genus condition #2).
+    """
+    from agents.layer1.species_list import PRIORITY_GENERA, PRIORITY_SPECIES
+    genus_cap    = genus.strip().capitalize()
+    is_priority  = genus_cap in PRIORITY_GENERA
+    family_match = next((fam for fam, genera in PRIORITY_SPECIES.items() if genus_cap in genera), None)
+    return {
+        "genus":          genus_cap,
+        "is_priority":    is_priority,
+        "family":         family_match,
+        "will_trigger_gpt": is_priority,
+        "reason": (
+            f"'{genus_cap}' is in PRIORITY_GENERA (family {family_match}) "
+            "→ GPT vision is always used when it appears in top-3."
+            if is_priority else
+            f"'{genus_cap}' is not a priority genus — GPT fallback only if confidence < 80% or parse fails."
+        ),
+    }
+
+
+@app.get("/dev/speciesnet/gpt-vision", tags=["speciesnet"])
+async def dev_speciesnet_gpt_vision(
+    image_url: str = Query(..., description="Publicly accessible image URL to identify"),
+):
+    """
+    Call GPT-5-mini vision directly on an image URL.
+
+    Uses the same gpt_identify() function invoked by the live pipeline when
+    SpeciesNet confidence is below threshold or a priority genus appears in top-3.
+    Requires Azure OpenAI credentials in .env.
+    """
+    from agents.layer1.gpt_vision import gpt_identify
+    try:
+        result = await gpt_identify(image_url)
+        return {
+            "image_url":       image_url,
+            "scientific_name": result.scientific_name,
+            "common_name":     result.common_name,
+            "confidence":      result.confidence,
+            "source":          result.source,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+class _PredictionPayload(BaseModel):
+    prediction: dict[str, Any]
+    image_url:  str = ""
+
+
+@app.post("/dev/speciesnet/relevancy", tags=["speciesnet"])
+async def dev_speciesnet_relevancy(body: _PredictionPayload):
+    """
+    Run the relevancy gate on a SpeciesNet prediction dict.
+
+    No model needed — purely rule-based logic (detection label + confidence threshold).
+
+    Example body:
+    ```json
+    {
+      "prediction": {
+        "detections": [{"label": "animal", "conf": 0.92}],
+        "classifications": {
+          "classes": ["uuid;mammalia;carnivora;felidae;panthera;tigris;tiger"],
+          "scores": [0.91]
+        }
+      }
+    }
+    ```
+    """
+    from agents.layer1.relevancy import check_relevancy
+    result = check_relevancy(body.prediction)
+    return {
+        "is_relevant":         result.is_relevant,
+        "reason":              result.reason,
+        "top_detection_label": result.top_detection_label,
+        "top_detection_score": result.top_detection_score,
+    }
+
+
+@app.post("/dev/speciesnet/identify", tags=["speciesnet"])
+async def dev_speciesnet_identify(body: _PredictionPayload):
+    """
+    Run the full two-stage identification on a SpeciesNet prediction dict.
+
+    Stage 1 (label parse + routing) is purely deterministic — no model, no LLM.
+    Stage 2 (GPT vision) fires only when routing conditions are met; Azure credentials
+    must be configured if you want to test the GPT fallback path.
+
+    Provide image_url only when you expect GPT vision to be triggered.
+
+    Example body (high-confidence model path — no GPT):
+    ```json
+    {
+      "prediction": {
+        "detections": [{"label": "animal", "conf": 0.95}],
+        "classifications": {
+          "classes": ["uuid;mammalia;carnivora;felidae;neofelis;nebulosa;clouded leopard"],
+          "scores": [0.87]
+        }
+      },
+      "image_url": ""
+    }
+    ```
+    """
+    from agents.layer1.identifier import identify_species
+    try:
+        result = await identify_species(body.prediction, body.image_url or "")
+        return {
+            "scientific_name": result.scientific_name,
+            "confidence":      result.confidence,
+            "source":          result.source,
+            "top_label_raw":   result.top_label_raw,
+            "family":          result.family,
+            "genus":           result.genus,
+            "common_name":     result.common_name,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/dev/speciesnet/full-analysis", tags=["speciesnet"])
+async def dev_speciesnet_full_analysis(
+    image_url:  str   = Query(..., description="Publicly accessible image URL"),
+    latitude:   float = Query(None),
+    longitude:  float = Query(None),
+):
+    """
+    Run the complete ImageAnalysisAgent pipeline (cache → SpeciesNet → relevancy → identifier).
+
+    Requires the SpeciesNet model to be loaded. The dev_server does not load the model
+    by default — start the main app (uvicorn main:app --port 8000) and call the /predict
+    endpoint instead, or supply a pre-built prediction dict to /dev/speciesnet/identify.
+
+    Returns 503 if the SpeciesNet model has not been injected.
+    """
+    from agents.layer1.image_agent import get_image_agent
+    try:
+        agent = get_image_agent()
+    except RuntimeError:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "SpeciesNet model not loaded in this process. "
+                "Use /dev/speciesnet/identify with a manually supplied prediction dict, "
+                "or start the main server (uvicorn main:app) and call /predict."
+            ),
+        )
+    try:
+        result = await agent.run(image_url, latitude, longitude)
+        return result.model_dump()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stats
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/dev/stats/reports", tags=["stats"])
+async def dev_stats_reports(
+    latitude:  float = Query(..., description="Centre latitude (decimal degrees)"),
+    longitude: float = Query(..., description="Centre longitude (decimal degrees)"),
+    radius_km: float = Query(50.0, ge=1.0, le=2000.0, description="Radius in kilometres"),
+):
+    """
+    Proxy to GET /stats/reports with radius filtering.
+    Returns the full ReportStatsResponse that the frontend consumes:
+    totals, unique_species list, recent_sightings (one card per species),
+    location breakdowns, and distribution dicts.
+    """
+    from agents.layer0.stats_router import get_report_stats
+    return await get_report_stats(latitude=latitude, longitude=longitude, radius_km=radius_km)
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("dev_server:app", host="0.0.0.0", port=8001, reload=True)

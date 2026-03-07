@@ -229,6 +229,8 @@ def _call_groq(payload: dict[str, Any]) -> dict[str, Any]:
 def run_pipeline(
     scientific_name: str,
     iucn_data: dict[str, Any] | None = None,
+    wiki_text_override: str | None = None,
+    iucn_summary_override: str | None = None,
 ) -> dict[str, Any]:
     """
     Full synchronous pipeline for one scientific name.
@@ -242,7 +244,17 @@ def run_pipeline(
         Scientific name, e.g. "Panthera tigris".
     iucn_data:
         Pre-fetched IUCN dict (e.g. from the live IUCN API fallback).  When
-        provided the Azure Blob fetch is skipped entirely.
+        provided (or when iucn_summary_override is set) the Azure Blob fetch
+        is skipped entirely.
+    wiki_text_override:
+        Wikipedia extract fetched by the caller.  Used in the caller-supplied
+        path so Groq gets the same Wikipedia context as the blob path.
+    iucn_summary_override:
+        Compact plain-text IUCN summary built by ExplorerAgent._iucn_summary().
+        When set, the heavy IUCN dict is not included in the Groq payload;
+        only scientific_name + this summary + wiki_extract are sent.
+        This keeps the context to ~4 lines of conservation data instead of
+        kilobytes of nested JSON, reducing token cost and improving signal/noise.
 
     Results are cached in-process for 24 hours — cache is thread-safe.
     FastAPI runs plain `def` routes in a thread-pool executor automatically,
@@ -257,13 +269,13 @@ def run_pipeline(
         logger.info("Cache hit for %r", scientific_name)
         return cached
 
-    # ── Blob fetch (skipped when caller already has the data) ─────────────────
-    caller_supplied = iucn_data is not None
+    # ── Blob fetch (skipped when caller has data or provides a summary) ────────
+    caller_supplied = iucn_data is not None or iucn_summary_override is not None
     if not caller_supplied:
         normalized = _normalize(scientific_name.strip())
         iucn_data = _fetch_blob(normalized)
 
-    taxon: dict = iucn_data.get("taxon") or {}
+    taxon: dict = (iucn_data or {}).get("taxon") or {}
     inaturalist_name = taxon.get("scientific_name", scientific_name)
 
     common_names = taxon.get("common_names") or []
@@ -285,25 +297,34 @@ def run_pipeline(
             wiki_text = wiki_future.result()
             photo_url, photo_credit = photo_future.result()
     else:
-        # iucn_data was supplied by the caller; skip Wikipedia and iNaturalist
-        # to avoid the blocking network round-trips — ExplorerAgent already
-        # fetches the iNaturalist photo independently, and the IUCN assessment
-        # has sufficient context for the Groq trait extraction.
-        wiki_text = "Not fetched (pre-supplied IUCN data)"
+        # iucn_data was supplied by the caller; iNaturalist is skipped since
+        # ExplorerAgent fetches the photo independently.  Use the Wikipedia
+        # text forwarded by the caller when available, otherwise fall back to
+        # an informational placeholder.
+        wiki_text = wiki_text_override or "Not fetched (pre-supplied IUCN data)"
 
-    payload: dict[str, Any] = {
-        "assessment_id"  : iucn_data.get("assessment_id"),
-        "year_published" : iucn_data.get("year_published"),
-        "scientific_name": taxon.get("scientific_name"),
-        "common_names"   : main_names,
-        "category"       : _safe_get(iucn_data, "red_list_category", "description", "en"),
-        "references"     : iucn_data.get("references") or [],
-        "url"            : iucn_data.get("url"),
-        "sis_taxon_id"   : iucn_data.get("sis_taxon_id"),
-        "photo_url"      : photo_url or "Not available",
-        "photo_credit"   : photo_credit or "Not available",
-        "wiki_extract"   : wiki_text,
-    }
+    if iucn_summary_override:
+        # Caller supplied a pre-built IUCN summary; send only the essential
+        # fields to Groq so the context stays minimal and focused.
+        payload: dict[str, Any] = {
+            "scientific_name": scientific_name,
+            "iucn_summary"   : iucn_summary_override,
+            "wiki_extract"   : wiki_text,
+        }
+    else:
+        payload = {
+            "assessment_id"  : iucn_data.get("assessment_id"),
+            "year_published" : iucn_data.get("year_published"),
+            "scientific_name": taxon.get("scientific_name"),
+            "common_names"   : main_names,
+            "category"       : _safe_get(iucn_data, "red_list_category", "description", "en"),
+            "references"     : iucn_data.get("references") or [],
+            "url"            : iucn_data.get("url"),
+            "sis_taxon_id"   : iucn_data.get("sis_taxon_id"),
+            "photo_url"      : photo_url or "Not available",
+            "photo_credit"   : photo_credit or "Not available",
+            "wiki_extract"   : wiki_text,
+        }
 
     # ── LLM trait extraction ──────────────────────────────────────────────────
     try:

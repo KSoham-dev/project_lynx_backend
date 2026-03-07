@@ -46,10 +46,47 @@ def _fetch_photo_sync(scientific_name: str) -> tuple[Optional[str], Optional[str
             logger.debug("[inaturalist] No results for %r", scientific_name)
             return None, None
 
-        photo = results[0].get("default_photo") or {}
-        url   = photo.get("medium_url")
-        credit = photo.get("attribution")
-        logger.info("[inaturalist] Photo found for %r: %s", scientific_name, url)
+        # Prefer a CC-licensed photo over an all-rights-reserved one.
+        # Walk every result's default_photo and pick the first that has
+        # "cc" in its license_code or attribution (case-insensitive).
+        # Fall back to the very first photo if nothing CC is found.
+        def _is_cc(photo: dict) -> bool:
+            license_code = (photo.get("license_code") or "").lower()
+            attribution  = (photo.get("attribution")  or "").lower()
+            return "cc" in license_code or "cc" in attribution
+
+        def _is_all_rights_reserved(photo: dict) -> bool:
+            return "all rights reserved" in (photo.get("attribution") or "").lower()
+
+        chosen_photo: dict | None = None
+
+        for result in results:
+            p = result.get("default_photo") or {}
+            if not p.get("medium_url"):
+                continue
+            if _is_cc(p) and not _is_all_rights_reserved(p):
+                chosen_photo = p
+                break
+
+        if chosen_photo is None:
+            # No CC-licensed photo found anywhere in the results
+            logger.info(
+                "[inaturalist] No CC-licensed photo found for %r — returning no photo",
+                scientific_name,
+            )
+            return None, None
+
+        url    = chosen_photo.get("medium_url")
+        credit = chosen_photo.get("attribution")
+        default_photo = results[0].get("default_photo") or {}
+        if chosen_photo is not default_photo and _is_all_rights_reserved(default_photo):
+            logger.info(
+                "[inaturalist] Default photo for %r is all-rights-reserved; "
+                "using CC-licensed fallback: %s",
+                scientific_name, url,
+            )
+        else:
+            logger.info("[inaturalist] Photo found for %r: %s", scientific_name, url)
         return url, credit
     except Exception as exc:
         logger.warning("[inaturalist] Fetch failed for %r: %s", scientific_name, exc)

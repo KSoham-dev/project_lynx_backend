@@ -416,6 +416,9 @@ async def run_orchestrator(request: AgentRequest) -> tuple[str, dict[str, Any]]:
             "[orchestrator] Image not relevant and no message — skipping Layer 2. "
             "session=%s", request.session_id,
         )
+        # Delete the irrelevant image from blob storage so it doesn't accumulate
+        if request.image_url:
+            asyncio.create_task(_delete_irrelevant_image(request.image_url))
         return "", {
             "message": (
                 "We couldn't detect any animal in your image. "
@@ -431,6 +434,43 @@ async def run_orchestrator(request: AgentRequest) -> tuple[str, dict[str, Any]]:
         time.monotonic() - t_start,
     )
     return "", structured_data
+
+
+async def _delete_irrelevant_image(image_url: str) -> None:
+    """
+    Delete a blob by URL when the image is declared irrelevant.
+
+    Parses the container and blob name from the URL, then issues a
+    synchronous delete_blob() in a thread.  Failures are logged and
+    swallowed — they must never surface to the caller.
+    """
+    try:
+        from urllib.parse import urlparse
+        parsed    = urlparse(image_url)
+        # Path is /<container>/<blob_name_possibly_with_slashes>
+        path_parts = parsed.path.lstrip("/").split("/", 1)
+        if len(path_parts) != 2:
+            logger.warning(
+                "[orchestrator] Cannot parse blob URL for deletion: %s", image_url
+            )
+            return
+        container_name, blob_name = path_parts
+
+        def _delete_sync() -> None:
+            from pipeline.species_traits import _build_blob_service_client
+            service = _build_blob_service_client()
+            blob_client = service.get_blob_client(container=container_name, blob=blob_name)
+            blob_client.delete_blob(delete_snapshots="include")
+            logger.info(
+                "[orchestrator] Irrelevant image deleted: container=%s blob=%s",
+                container_name, blob_name,
+            )
+
+        await asyncio.to_thread(_delete_sync)
+    except Exception as exc:
+        logger.warning(
+            "[orchestrator] Failed to delete irrelevant image %s: %s", image_url, exc
+        )
 
 
 async def _direct_dispatch_layer2(
