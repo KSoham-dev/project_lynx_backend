@@ -61,6 +61,7 @@ from agents.layer2.iucn_fetcher import (
     iucn_scientific_name,
     iucn_taxon_field,
     iucn_threat_titles,
+    is_iucn_not_found,
 )
 from agents.state.data_store import upsert_report
 
@@ -456,7 +457,16 @@ def _build_pdf(report_data: dict[str, Any]) -> bytes:
         img_bytes = _download_image_bytes(image_url)
         if img_bytes:
             try:
-                story.append(RLImage(img_bytes, width=PAGE_W * cm, height=8 * cm))
+                from PIL import Image as PILImage
+                _pil = PILImage.open(img_bytes)
+                _orig_w, _orig_h = _pil.size
+                img_bytes.seek(0)
+                _max_w = PAGE_W * cm          # full usable width
+                _max_h = 10 * cm              # hard ceiling height
+                _scale = min(_max_w / _orig_w, _max_h / _orig_h)
+                _img_w = _orig_w * _scale
+                _img_h = _orig_h * _scale
+                story.append(RLImage(img_bytes, width=_img_w, height=_img_h))
                 story.append(Paragraph(
                     "Figure 1: Submitted field photograph",
                     S("Cap", fontSize=7, textColor=GREY_TEXT, alignment=TA_CENTER, spaceBefore=2),
@@ -673,14 +683,24 @@ class ReporterAgent:
         _common_unknown = not common_names or all(
             not n or n.lower() in ("unknown", "unidentified") for n in common_names
         )
-        if _sci_unknown and _common_unknown:
+        if is_iucn_not_found(iucn_data):
+            logger.warning(
+                "[reporter] Species not in any database: %r",
+                iucn_data.get("scientific_name"),
+            )
+            raise HTTPException(
+                status_code=404,
+                detail=iucn_data["message"],
+            )
+
+        if not iucn_data and _sci_unknown and _common_unknown:
             logger.warning(
                 "[reporter] Aborting — species could not be identified (scientific=%r, common_names=%r) session=%s",
                 scientific_name, common_names, request.session_id,
             )
             raise HTTPException(
-                status_code=500,
-                detail="Species could not be identified — report not generated. Please retake the photo with the animal clearly visible and try again.",
+                status_code=404,
+                detail="Could not identify the species from the provided input. Please retake the photo with the animal clearly visible and try again.",
             )
 
         report_id    = str(uuid.uuid4())

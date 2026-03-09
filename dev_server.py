@@ -1411,6 +1411,107 @@ async def dev_species_cache_delete(
     }
 
 
+# ── Encyclopedia Random endpoints ────────────────────────────────────────────
+# These endpoints test the GET /encyclopedia/random implementation without
+# going through the full main.py server.
+
+
+@app.get("/dev/encyclopedia/random", tags=["encyclopedia"])
+async def dev_encyclopedia_random():
+    """
+    Full end-to-end test of the Surprise Me feature.
+
+    Picks a random species from the IUCN blob container, fetches its full
+    IUCN JSON, and enriches it with an iNaturalist photo — identical to what
+    GET /encyclopedia/random returns in the main app.
+
+    Uses the same in-memory blob-name cache (1-hour TTL) so repeated calls
+    do not re-list the container.
+    """
+    from agents.layer0.encyclopedia_router import get_random_species
+    return await get_random_species()
+
+
+@app.get("/dev/encyclopedia/blob-cache-status", tags=["encyclopedia"])
+async def dev_encyclopedia_blob_cache_status():
+    """
+    Inspect the current state of the in-memory blob name cache used by
+    GET /encyclopedia/random.
+
+    Returns how many blob names are cached, when the cache was last populated,
+    how many seconds remain before the next refresh, and the first/last 5
+    entries so you can verify the folder prefix and naming convention.
+    """
+    import time
+    from agents.layer0.encyclopedia_router import (
+        _cached_blob_names, _cache_loaded_at, _BLOB_CACHE_TTL,
+    )
+
+    now     = time.monotonic()
+    count   = len(_cached_blob_names)
+    age_s   = round(now - _cache_loaded_at, 1) if _cache_loaded_at else None
+    ttl_rem = round(_BLOB_CACHE_TTL - age_s, 1) if age_s is not None else None
+
+    return {
+        "cache_populated":   count > 0,
+        "blob_count":        count,
+        "cache_ttl_seconds": _BLOB_CACHE_TTL,
+        "age_seconds":       age_s,
+        "ttl_remaining_seconds": max(ttl_rem, 0) if ttl_rem is not None else None,
+        "will_refresh_on_next_call": (count == 0) or (ttl_rem is not None and ttl_rem <= 0),
+        "sample_first_5":    _cached_blob_names[:5],
+        "sample_last_5":     _cached_blob_names[-5:] if count >= 5 else [],
+        "note": (
+            "Cache is empty — first call to /dev/encyclopedia/random will populate it."
+            if count == 0 else
+            f"Cache holds {count} blob names; refreshes every {_BLOB_CACHE_TTL // 60} minutes."
+        ),
+    }
+
+
+@app.get("/dev/encyclopedia/blob-list-raw", tags=["encyclopedia"])
+async def dev_encyclopedia_blob_list_raw(
+    limit: int = Query(20, ge=1, le=200, description="Max blob names to return"),
+    force_refresh: bool = Query(False, description="Force a fresh listing from Azure, bypassing the cache"),
+):
+    """
+    List raw blob names from the IUCN container, optionally bypassing the cache.
+
+    Useful for:
+    - Verifying the container / folder env vars are correct.
+    - Confirming actual blob naming conventions before a Surprise Me test.
+    - Force-refreshing the cache after new blobs are uploaded.
+
+    Set force_refresh=true to clear the in-memory cache and re-list the container.
+    """
+    import time
+    from agents.layer0 import encyclopedia_router as _er
+
+    if force_refresh:
+        # Clear the module-level cache so _get_blob_names() does a fresh listing
+        _er._cached_blob_names = []
+        _er._cache_loaded_at   = 0.0
+
+    try:
+        blob_names = await _er._get_blob_names()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return {
+        "total_blobs":    len(blob_names),
+        "limit_applied":  limit,
+        "force_refresh":  force_refresh,
+        "sample":         blob_names[:limit],
+        "cache_loaded_at_monotonic": round(_er._cache_loaded_at, 2),
+        "note": (
+            f"Showing first {limit} of {len(blob_names)} blobs. "
+            "Use limit=200 to see more, or inspect the container directly for the full list."
+        ),
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("dev_server:app", host="0.0.0.0", port=8001, reload=True)

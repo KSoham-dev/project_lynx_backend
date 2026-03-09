@@ -50,6 +50,7 @@ from langchain_core.messages import (
 )
 from langchain_core.tools import tool
 from langchain_openai import AzureChatOpenAI
+from fastapi import HTTPException
 
 from agents.enums import AgentLayer, MessageRole
 from agents.layer0.config import get_settings
@@ -498,6 +499,8 @@ async def _direct_dispatch_layer2(
         from agents.layer2.reporter import ReporterAgent
         return await ReporterAgent().run(request, tool_results, iucn_data) or {}
 
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error("[orchestrator] Direct Layer 2 dispatch failed: %s", exc, exc_info=True)
         return {}
