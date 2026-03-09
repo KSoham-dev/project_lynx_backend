@@ -185,8 +185,10 @@
     .group-icon.pipeline{ background: rgba(14,165,233,.15); color: #7dd3fc; }
     .group-icon.speciesnet{ background: rgba(251,191,36,.14);  color: #fde68a; }
     .group-icon.stats     { background: rgba(52,211,153,.14);   color: #6ee7b7; }
+    .group-icon.cache     { background: rgba(168,85,247,.15);   color: #d8b4fe; }
 
-    .mod-stats { background: rgba(52,211,153,.11); color: #6ee7b7; border: 1px solid rgba(52,211,153,.30); }
+    .mod-stats  { background: rgba(52,211,153,.11);  color: #6ee7b7; border: 1px solid rgba(52,211,153,.30); }
+    .mod-cache  { background: rgba(168,85,247,.11);  color: #d8b4fe; border: 1px solid rgba(168,85,247,.30); }
 
     .group-label-text {
       font-size: 10px;
@@ -241,7 +243,8 @@
     }
 
     .pill-get  { background: rgba(16,185,129,.15); color: #6ee7b7; }
-    .pill-post { background: rgba(251,146,60,.15);  color: #fbbf24; }
+    .pill-post   { background: rgba(251,146,60,.15);  color: #fbbf24; }
+    .pill-delete { background: rgba(239,68,68,.15);   color: #fca5a5; }
 
     .fn-item.hidden { display: none; }
 
@@ -806,6 +809,14 @@
           <span class="fn-count" id="cnt-stats"></span>
         </div>
       </div>
+
+      <div id="group-cache">
+        <div class="group-header" style="margin-top:4px">
+          <div class="group-icon cache">⬡</div>
+          <span class="group-label-text">Image Cache</span>
+          <span class="fn-count" id="cnt-cache"></span>
+        </div>
+      </div>
     </aside>
 
     <!-- Main panel -->
@@ -1055,6 +1066,17 @@
         { name: 'scientific_name', label: 'Scientific Name', type: 'text', required: true, placeholder: 'e.g. Panthera tigris' },
       ],
     },
+    {
+      id: 'traits_groq_input_split',
+      name: 'groq_input_split',
+      module: 'species_traits',
+      desc: 'Show the exact input sent to Groq split into two explicit sections: IUCN (assessment data, taxonomy, references, photo) and Wikipedia (full extract with char count). Also shows the verbatim system prompt and the fully-rendered user message. No Groq call is made — inspection only.',
+      method: 'GET',
+      url: '/dev/traits/groq-input-split',
+      params: [
+        { name: 'scientific_name', label: 'Scientific Name', type: 'text', required: true, placeholder: 'e.g. Panthera tigris' },
+      ],
+    },
 
     // ── Reporter / Assessment ──
     {
@@ -1294,6 +1316,74 @@
       ],
     },
 
+    // ── Image Analysis Cache ──
+    {
+      id: 'cache_list',
+      name: 'cache_list',
+      module: 'cache',
+      desc: 'List all document IDs stored in the Cosmos image_analysis_cache container. Each entry shows the MD5 cache_id, the original image_url, and the TTL value so you can see which entries are near expiration. Sorted newest-first.',
+      method: 'GET',
+      url: '/dev/cache/list',
+      params: [],
+    },
+    {
+      id: 'cache_get',
+      name: 'cache_get',
+      module: 'cache',
+      desc: 'Fetch the full cached ImageAnalysisResult document for a specific cache ID. Paste an id from cache_list to see the stored result: scientific_name, confidence, identification_source, family, genus, image_url, etc.',
+      method: 'GET',
+      url: '/dev/cache/get',
+      params: [
+        { name: 'cache_id', label: 'Cache ID (MD5)', type: 'text', required: true, placeholder: 'e.g. a1b2c3d4e5f6...' },
+      ],
+    },
+    {
+      id: 'cache_delete',
+      name: 'cache_delete',
+      module: 'cache',
+      desc: 'Permanently delete a single entry from the image_analysis_cache by its cache ID. The next request for the same image will re-run the full identification pipeline. This action cannot be undone.',
+      method: 'DELETE',
+      url: '/dev/cache/delete',
+      params: [
+        { name: 'cache_id', label: 'Cache ID (MD5)', type: 'text', required: true, placeholder: 'e.g. a1b2c3d4e5f6...' },
+      ],
+    },
+
+    // ── Species Context Cache (used by ExplorerAgent / reporter) ──
+    {
+      id: 'species_cache_list',
+      name: 'species_cache_list',
+      module: 'cache',
+      desc: 'List all entries in the Cosmos species_context_cache — the cache used by ExplorerAgent and the reporter pipeline. Shows both traits:<name> (Groq output) and iucn:<name> (raw IUCN) buckets. THIS is the cache that must be cleared for explore to re-run.',
+      method: 'GET',
+      url: '/dev/species-cache/list',
+      params: [],
+    },
+    {
+      id: 'species_cache_get',
+      name: 'species_cache_get',
+      module: 'cache',
+      desc: "Fetch the full cached payload for a species from species_context_cache. Use prefix='traits' for Groq pipeline output, prefix='iucn' for raw IUCN data.",
+      method: 'GET',
+      url: '/dev/species-cache/get',
+      params: [
+        { name: 'scientific_name', label: 'Scientific Name', type: 'text',   required: true,  placeholder: 'e.g. Panthera tigris' },
+        { name: 'prefix',          label: 'Prefix',          type: 'select', required: false, options: ['traits','iucn'], default: 'traits' },
+      ],
+    },
+    {
+      id: 'species_cache_delete',
+      name: 'species_cache_delete',
+      module: 'cache',
+      desc: "Delete species_context_cache entries for a species AND evict the matching in-memory TTLCache. Use prefix='all' to clear both traits and iucn at once. This guarantees the next explore re-runs the full Groq pipeline.",
+      method: 'DELETE',
+      url: '/dev/species-cache/delete',
+      params: [
+        { name: 'scientific_name', label: 'Scientific Name', type: 'text',   required: true,  placeholder: 'e.g. Panthera tigris' },
+        { name: 'prefix',          label: 'Prefix',          type: 'select', required: false, options: ['traits','iucn','all'], default: 'all' },
+      ],
+    },
+
     // ── Stats API ──
     {
       id: 'stats_reports',
@@ -1430,6 +1520,18 @@
       { label: 'iNaturalist photo found',          pass: d => !!(d.inaturalist_photo || {}).photo_url, warn: true },
       { label: 'full_iucn_raw present',            pass: d => !!d.full_iucn_raw && Object.keys(d.full_iucn_raw).length > 0 },
       { label: 'no LLM calls (note field present)',pass: d => !!d.note },
+    ],
+    'traits_groq_input_split': [
+      { label: 'model present',                    pass: d => !!d.model },
+      { label: 'system_prompt present',            pass: d => typeof d.system_prompt === 'string' && d.system_prompt.length > 50 },
+      { label: 'user_message rendered',            pass: d => typeof d.user_message === 'string' && d.user_message.length > 30 },
+      { label: 'iucn_section present',             pass: d => !!d.iucn_section },
+      { label: 'iucn scientific_name populated',   pass: d => !!(d.iucn_section || {}).scientific_name },
+      { label: 'iucn category populated',          pass: d => !!(d.iucn_section || {}).category },
+      { label: 'iucn references present',          pass: d => Array.isArray((d.iucn_section || {}).references) },
+      { label: 'wikipedia_section present',        pass: d => !!d.wikipedia_section },
+      { label: 'wiki full_text non-empty',         pass: d => typeof ((d.wikipedia_section || {}).full_text) === 'string' && (d.wikipedia_section.full_text || '') !== 'Not found', warn: true },
+      { label: 'wiki full_text >200 chars',        pass: d => ((d.wikipedia_section || {}).full_text || '').length > 200, warn: true },
     ],
     'reporter_threat': [
       { label: 'threat_level present',              pass: d => !!d.threat_level },
@@ -1591,6 +1693,7 @@
   const groupPipeline   = document.getElementById('group-pipeline');
   const groupSpeciesnet = document.getElementById('group-speciesnet');
   const groupStats      = document.getElementById('group-stats');
+  const groupCache      = document.getElementById('group-cache');
 
   FUNCTIONS.forEach(fn => {
     const el = document.createElement('div');
@@ -1599,7 +1702,7 @@
     el.dataset.mod = fn.module;
     el.title = fn.name;
     el.innerHTML = `
-      <span class="method-pill ${fn.method === 'GET' ? 'pill-get' : 'pill-post'}">${fn.method}</span>
+      <span class="method-pill ${fn.method === 'GET' ? 'pill-get' : fn.method === 'DELETE' ? 'pill-delete' : 'pill-post'}">${fn.method}</span>
       ${fn.name}
     `;
     el.addEventListener('click', () => selectFn(fn.id));
@@ -1608,6 +1711,7 @@
                  : fn.module === 'pipeline'      ? groupPipeline
                  : fn.module === 'speciesnet'    ? groupSpeciesnet
                  : fn.module === 'stats'         ? groupStats
+                 : fn.module === 'cache'         ? groupCache
                  : groupTraits;
     target.appendChild(el);
   });
@@ -1621,12 +1725,14 @@
     const pipelineVisible   = [...groupPipeline.querySelectorAll('.fn-item:not(.hidden)')].length;
     const speciesnetVisible = [...groupSpeciesnet.querySelectorAll('.fn-item:not(.hidden)')].length;
     const statsVisible      = [...groupStats.querySelectorAll('.fn-item:not(.hidden)')].length;
+    const cacheVisible      = [...groupCache.querySelectorAll('.fn-item:not(.hidden)')].length;
     document.getElementById('cnt-iucn').textContent        = iucnVisible;
     document.getElementById('cnt-traits').textContent      = traitsVisible;
     document.getElementById('cnt-reporter').textContent    = reporterVisible;
     document.getElementById('cnt-pipeline').textContent    = pipelineVisible;
     document.getElementById('cnt-speciesnet').textContent  = speciesnetVisible;
     document.getElementById('cnt-stats').textContent       = statsVisible;
+    document.getElementById('cnt-cache').textContent       = cacheVisible;
   }
 
   // ─── Sidebar filter ─────────────────────────────────────────────────────────
@@ -1664,6 +1770,7 @@
                    : currentFn.module === 'pipeline'      ? 'mod-pipeline'
                    : currentFn.module === 'speciesnet'    ? 'mod-speciesnet'
                    : currentFn.module === 'stats'         ? 'mod-stats'
+                   : currentFn.module === 'cache'         ? 'mod-cache'
                    : 'mod-traits';
 
     view.innerHTML = `
@@ -1796,7 +1903,7 @@
       let url      = currentFn.url;
       let init     = { method: currentFn.method };
 
-      if (currentFn.method === 'GET') {
+      if (currentFn.method === 'GET' || currentFn.method === 'DELETE') {
         const qs = new URLSearchParams();
         for (const p of currentFn.params) {
           const v = document.getElementById(`p-${p.name}`)?.value?.trim();
@@ -1836,6 +1943,9 @@
       if (currentFn.id === 'traits_full_context' && resp.ok) {
         body.classList.add('fc-layout');
         body.innerHTML = renderFullContext(data);
+      } else if (currentFn.id === 'traits_groq_input_split' && resp.ok) {
+        body.classList.add('fc-layout');
+        body.innerHTML = renderGroqInputSplit(data);
       } else if (currentFn.id === 'reporter_safety' && resp.ok) {
         body.classList.add('fc-layout');
         body.innerHTML = renderSafetyData(data);
@@ -2084,6 +2194,105 @@
         </div>
         <div class="fc-panel-body">
           <div class="fc-json">${syntaxHighlight(JSON.stringify(forwarded, null, 2))}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  // ─── Groq input split renderer ──────────────────────────────────────────────
+  function renderGroqInputSplit(data) {
+    const iucn = data.iucn_section       || {};
+    const wiki = data.wikipedia_section  || {};
+
+    // ── IUCN section fields table ──
+    const iucnFields = [
+      ['scientific_name', iucn.scientific_name],
+      ['common_names',    (iucn.common_names || []).join(', ') || '—'],
+      ['category',        iucn.category],
+      ['assessment_id',   iucn.assessment_id],
+      ['year_published',  iucn.year_published],
+      ['sis_taxon_id',    iucn.sis_taxon_id],
+      ['url',             iucn.url],
+      ['photo_url',       iucn.photo_url],
+      ['photo_credit',    iucn.photo_credit],
+      ['references_count', (iucn.references || []).length],
+    ].map(([k, v]) =>
+      `<tr><td>${esc(k)}</td><td>${esc(v != null ? String(v) : '—')}</td></tr>`
+    ).join('');
+
+    // ── References list ──
+    const refs = (iucn.references || []);
+    const refsHtml = refs.length
+      ? refs.slice(0, 12).map((r, i) => {
+          const title = r.title || r.citation || JSON.stringify(r);
+          return `<div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--border)">
+                    <span style="color:var(--accent);font-family:monospace;font-size:11px;min-width:20px">${i + 1}.</span>
+                    <span style="font-size:11px;color:var(--text);line-height:1.4">${esc(title)}</span>
+                  </div>`;
+        }).join('') + (refs.length > 12 ? `<div style="color:var(--text-muted);font-size:11px;padding-top:6px">… and ${refs.length - 12} more</div>` : '')
+      : `<span style="color:var(--text-muted);font-size:12px">No references</span>`;
+
+    // ── Wiki stats bar ──
+    const wikiChars = wiki.char_count || 0;
+    const wikiPct   = Math.min(100, Math.round(wikiChars / 80)); // rough bar width %
+    const wikiColour = wikiChars === 0 ? 'var(--red)' : wikiChars < 200 ? '#f59e0b' : '#10b981';
+
+    // ── System prompt ──
+    const sysPrompt  = data.system_prompt || '';
+    const userMsg    = data.user_message  || '';
+
+    // Highlight the two sections inside user message
+    const iucnPart = userMsg.replace(/\n/g, '↵').replace(/"wiki_extract".*$/, '<span style="opacity:.4">…(wiki_extract follows)</span>');
+
+    return `
+      <div class="fc-panel">
+        <div class="fc-panel-header fc-ph-iucn">📊 Section 1 — IUCN Data</div>
+        <div class="fc-panel-body">
+          <table class="fc-kv-table"><tbody>${iucnFields}</tbody></table>
+        </div>
+      </div>
+
+      <div class="fc-panel" style="border-color:rgba(99,102,241,.3)">
+        <div class="fc-panel-header" style="background:rgba(99,102,241,.12);color:#a5b4fc">
+          📎 References (${refs.length})
+        </div>
+        <div class="fc-panel-body">${refsHtml}</div>
+      </div>
+
+      <div class="fc-panel">
+        <div class="fc-panel-header fc-ph-wiki">
+          📖 Section 2 — Wikipedia Extract
+          <span style="margin-left:auto;font-size:10px;font-weight:400;letter-spacing:0;text-transform:none">
+            searched as: <strong style="color:var(--text)">${esc(wiki.search_name_used || '—')}</strong>
+          </span>
+        </div>
+        <div class="fc-panel-body">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+            <span style="font-size:11px;color:var(--text-muted)">Characters:</span>
+            <div style="flex:1;height:6px;background:var(--border);border-radius:3px;overflow:hidden">
+              <div style="width:${wikiPct}%;height:100%;background:${wikiColour};border-radius:3px;transition:width .3s"></div>
+            </div>
+            <span style="font-size:12px;font-weight:600;color:${wikiColour}">${wikiChars.toLocaleString()}</span>
+          </div>
+          <div class="fc-wiki-extract">${esc(wiki.full_text || 'Not found')}</div>
+        </div>
+      </div>
+
+      <div class="fc-panel" style="border-color:rgba(14,165,233,.3)">
+        <div class="fc-panel-header" style="background:rgba(14,165,233,.12);color:#7dd3fc">
+          🤖 System Prompt  <span style="font-size:10px;opacity:.6;font-weight:400;letter-spacing:0;text-transform:none">(${sysPrompt.length} chars)</span>
+        </div>
+        <div class="fc-panel-body">
+          <div style="font-size:11px;line-height:1.6;color:var(--text);white-space:pre-wrap">${esc(sysPrompt)}</div>
+        </div>
+      </div>
+
+      <div class="fc-panel" style="border-color:rgba(245,158,11,.3)">
+        <div class="fc-panel-header" style="background:rgba(245,158,11,.12);color:#fcd34d">
+          ✉ User Message (full)  <span style="font-size:10px;opacity:.6;font-weight:400;letter-spacing:0;text-transform:none">${data.model || ''}</span>
+        </div>
+        <div class="fc-panel-body">
+          <div style="font-size:11px;line-height:1.6;color:var(--text);white-space:pre-wrap;word-break:break-all">${esc(userMsg)}</div>
         </div>
       </div>
     `;
