@@ -3,4 +3,4 @@ speciesnet-pytorch-v4.0.2b-v1.tar.gz
 model
 *.zip
 ppt/
-/.env
+.env
