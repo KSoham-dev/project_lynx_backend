@@ -17,7 +17,27 @@ COPY requirements.txt .
 RUN uv pip install --no-cache --prefix=/install -r requirements.txt
 
 
-# ── Stage 2: runtime image ─────────────────────────────────────────────────────
+# ── Stage 2: fetch .env from DVC remote ────────────────────────────────────────
+FROM python:3.12-slim AS env_fetcher
+
+# Reuse installed packages from builder — includes dvc + dvc-azure
+COPY --from=builder /install /usr/local
+
+WORKDIR /fetch
+
+# DVC remote configuration and the .env pointer file
+COPY .dvc/ .dvc/
+COPY .env.dvc .
+
+# Azure Storage credential — passed as a build arg at CI/CD time
+# Never baked into the final runtime image (this stage is discarded)
+ARG AZURE_STORAGE_CONNECTION_STRING
+ENV AZURE_STORAGE_CONNECTION_STRING=${AZURE_STORAGE_CONNECTION_STRING}
+
+RUN dvc pull .env.dvc
+
+
+# ── Stage 3: runtime image ─────────────────────────────────────────────────────
 FROM python:3.12-slim AS runtime
 
 # Runtime shared libraries (opencv-headless, shapely, etc.)
@@ -37,7 +57,8 @@ WORKDIR /app
 COPY model/ /app/model/
 
 # ── Copy application code ──────────────────────────────────────────────────────
-COPY .env .
+# .env is pulled from DVC in the env_fetcher stage — never from the local filesystem
+COPY --from=env_fetcher /fetch/.env .
 COPY main.py .
 COPY agents/ /app/agents/
 COPY pipeline/ /app/pipeline/

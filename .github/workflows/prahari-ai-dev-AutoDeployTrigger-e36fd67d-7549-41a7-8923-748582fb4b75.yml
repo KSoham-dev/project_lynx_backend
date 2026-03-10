@@ -42,3 +42,4 @@ jobs:
           containerAppName: prahari-ai-dev
           resourceGroup: prahari-ai-fastapi-rg
           imageToBuild: ca157bb2d22eacr.azurecr.io/prahari-ai-dev:${{ github.sha }}
+          buildArguments: AZURE_STORAGE_CONNECTION_STRING=${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
