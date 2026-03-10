@@ -2,7 +2,7 @@ import os, json, glob, requests
 from groq import Groq
 from concurrent.futures import ThreadPoolExecutor
 
-client = Groq(api_key="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")
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 SYSTEM_PROMPT = """You are a rigorous biological data extractor and taxonomist with deep expertise in zoology, ecology, and conservation biology.
 
