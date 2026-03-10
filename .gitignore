@@ -4,3 +4,4 @@ model
 *.zip
 ppt/
 .env
+sample_pipeline.py
