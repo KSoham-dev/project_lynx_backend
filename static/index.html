@@ -184,9 +184,13 @@
     .group-icon.reporter{ background: rgba(251,146,60,.15);  color: #fbbf24; }
     .group-icon.pipeline{ background: rgba(14,165,233,.15); color: #7dd3fc; }
     .group-icon.speciesnet{ background: rgba(251,191,36,.14);  color: #fde68a; }
-    .group-icon.stats     { background: rgba(52,211,153,.14);   color: #6ee7b7; }
+    .group-icon.stats         { background: rgba(52,211,153,.14);   color: #6ee7b7; }
+    .group-icon.cache         { background: rgba(168,85,247,.15);   color: #d8b4fe; }
+    .group-icon.encyclopedia  { background: rgba(45,212,191,.15);   color: #5eead4; }
 
-    .mod-stats { background: rgba(52,211,153,.11); color: #6ee7b7; border: 1px solid rgba(52,211,153,.30); }
+    .mod-stats  { background: rgba(52,211,153,.11);  color: #6ee7b7; border: 1px solid rgba(52,211,153,.30); }
+    .mod-cache  { background: rgba(168,85,247,.11);  color: #d8b4fe; border: 1px solid rgba(168,85,247,.30); }
+    .mod-encyclopedia { background: rgba(45,212,191,.12); color: #5eead4; border: 1px solid rgba(45,212,191,.22); }
 
     .group-label-text {
       font-size: 10px;
@@ -241,7 +245,8 @@
     }
 
     .pill-get  { background: rgba(16,185,129,.15); color: #6ee7b7; }
-    .pill-post { background: rgba(251,146,60,.15);  color: #fbbf24; }
+    .pill-post   { background: rgba(251,146,60,.15);  color: #fbbf24; }
+    .pill-delete { background: rgba(239,68,68,.15);   color: #fca5a5; }
 
     .fn-item.hidden { display: none; }
 
@@ -341,6 +346,7 @@
     .mod-reporter { background: rgba(251,146,60,.13);  color: #fbbf24; border: 1px solid rgba(251,146,60,.25); }
     .mod-pipeline    { background: rgba(14,165,233,.12); color: #7dd3fc; border: 1px solid rgba(14,165,233,.22); }
     .mod-speciesnet  { background: rgba(251,191,36,.11); color: #fde68a; border: 1px solid rgba(251,191,36,.30); }
+    .mod-encyclopedia-fn { background: rgba(45,212,191,.12); color: #5eead4; border: 1px solid rgba(45,212,191,.22); }
 
     .fn-desc {
       color: var(--text-dim);
@@ -806,6 +812,22 @@
           <span class="fn-count" id="cnt-stats"></span>
         </div>
       </div>
+
+      <div id="group-cache">
+        <div class="group-header" style="margin-top:4px">
+          <div class="group-icon cache">⬡</div>
+          <span class="group-label-text">Image Cache</span>
+          <span class="fn-count" id="cnt-cache"></span>
+        </div>
+      </div>
+
+      <div id="group-encyclopedia">
+        <div class="group-header" style="margin-top:4px">
+          <div class="group-icon encyclopedia">✦</div>
+          <span class="group-label-text">Encyclopedia</span>
+          <span class="fn-count" id="cnt-encyclopedia"></span>
+        </div>
+      </div>
     </aside>
 
     <!-- Main panel -->
@@ -1055,6 +1077,17 @@
         { name: 'scientific_name', label: 'Scientific Name', type: 'text', required: true, placeholder: 'e.g. Panthera tigris' },
       ],
     },
+    {
+      id: 'traits_groq_input_split',
+      name: 'groq_input_split',
+      module: 'species_traits',
+      desc: 'Show the exact input sent to Groq split into two explicit sections: IUCN (assessment data, taxonomy, references, photo) and Wikipedia (full extract with char count). Also shows the verbatim system prompt and the fully-rendered user message. No Groq call is made — inspection only.',
+      method: 'GET',
+      url: '/dev/traits/groq-input-split',
+      params: [
+        { name: 'scientific_name', label: 'Scientific Name', type: 'text', required: true, placeholder: 'e.g. Panthera tigris' },
+      ],
+    },
 
     // ── Reporter / Assessment ──
     {
@@ -1294,6 +1327,74 @@
       ],
     },
 
+    // ── Image Analysis Cache ──
+    {
+      id: 'cache_list',
+      name: 'cache_list',
+      module: 'cache',
+      desc: 'List all document IDs stored in the Cosmos image_analysis_cache container. Each entry shows the MD5 cache_id, the original image_url, and the TTL value so you can see which entries are near expiration. Sorted newest-first.',
+      method: 'GET',
+      url: '/dev/cache/list',
+      params: [],
+    },
+    {
+      id: 'cache_get',
+      name: 'cache_get',
+      module: 'cache',
+      desc: 'Fetch the full cached ImageAnalysisResult document for a specific cache ID. Paste an id from cache_list to see the stored result: scientific_name, confidence, identification_source, family, genus, image_url, etc.',
+      method: 'GET',
+      url: '/dev/cache/get',
+      params: [
+        { name: 'cache_id', label: 'Cache ID (MD5)', type: 'text', required: true, placeholder: 'e.g. a1b2c3d4e5f6...' },
+      ],
+    },
+    {
+      id: 'cache_delete',
+      name: 'cache_delete',
+      module: 'cache',
+      desc: 'Permanently delete a single entry from the image_analysis_cache by its cache ID. The next request for the same image will re-run the full identification pipeline. This action cannot be undone.',
+      method: 'DELETE',
+      url: '/dev/cache/delete',
+      params: [
+        { name: 'cache_id', label: 'Cache ID (MD5)', type: 'text', required: true, placeholder: 'e.g. a1b2c3d4e5f6...' },
+      ],
+    },
+
+    // ── Species Context Cache (used by ExplorerAgent / reporter) ──
+    {
+      id: 'species_cache_list',
+      name: 'species_cache_list',
+      module: 'cache',
+      desc: 'List all entries in the Cosmos species_context_cache — the cache used by ExplorerAgent and the reporter pipeline. Shows both traits:<name> (Groq output) and iucn:<name> (raw IUCN) buckets. THIS is the cache that must be cleared for explore to re-run.',
+      method: 'GET',
+      url: '/dev/species-cache/list',
+      params: [],
+    },
+    {
+      id: 'species_cache_get',
+      name: 'species_cache_get',
+      module: 'cache',
+      desc: "Fetch the full cached payload for a species from species_context_cache. Use prefix='traits' for Groq pipeline output, prefix='iucn' for raw IUCN data.",
+      method: 'GET',
+      url: '/dev/species-cache/get',
+      params: [
+        { name: 'scientific_name', label: 'Scientific Name', type: 'text',   required: true,  placeholder: 'e.g. Panthera tigris' },
+        { name: 'prefix',          label: 'Prefix',          type: 'select', required: false, options: ['traits','iucn'], default: 'traits' },
+      ],
+    },
+    {
+      id: 'species_cache_delete',
+      name: 'species_cache_delete',
+      module: 'cache',
+      desc: "Delete species_context_cache entries for a species AND evict the matching in-memory TTLCache. Use prefix='all' to clear both traits and iucn at once. This guarantees the next explore re-runs the full Groq pipeline.",
+      method: 'DELETE',
+      url: '/dev/species-cache/delete',
+      params: [
+        { name: 'scientific_name', label: 'Scientific Name', type: 'text',   required: true,  placeholder: 'e.g. Panthera tigris' },
+        { name: 'prefix',          label: 'Prefix',          type: 'select', required: false, options: ['traits','iucn','all'], default: 'all' },
+      ],
+    },
+
     // ── Stats API ──
     {
       id: 'stats_reports',
@@ -1306,6 +1407,38 @@
         { name: 'latitude',  label: 'Latitude',          type: 'number', required: true,  placeholder: 'e.g. 25.21' },
         { name: 'longitude', label: 'Longitude',         type: 'number', required: true,  placeholder: 'e.g. 84.99' },
         { name: 'radius_km', label: 'Radius (km)',        type: 'number', required: false, placeholder: '50', default: '50' },
+      ],
+    },
+
+    // ── Encyclopedia Random ──
+    {
+      id: 'encyclopedia_random',
+      name: 'get_random_species',
+      module: 'encyclopedia',
+      desc: 'Full Surprise Me — picks a random species from the IUCN blob container, fetches its complete IUCN JSON, and enriches it with an iNaturalist CC-licensed photo. This is the exact production endpoint (GET /encyclopedia/random). Uses the 1-hour in-memory blob-name cache so repeated calls are fast.',
+      method: 'GET',
+      url: '/dev/encyclopedia/random',
+      params: [],
+    },
+    {
+      id: 'encyclopedia_blob_cache_status',
+      name: 'blob_cache_status',
+      module: 'encyclopedia',
+      desc: 'Inspect the in-memory blob-name cache used by get_random_species. Shows whether the cache is populated, the total blob count, age since last load, TTL remaining (1 h), and first/last 5 blob names to verify folder prefix and naming convention.',
+      method: 'GET',
+      url: '/dev/encyclopedia/blob-cache-status',
+      params: [],
+    },
+    {
+      id: 'encyclopedia_blob_list_raw',
+      name: 'blob_list_raw',
+      module: 'encyclopedia',
+      desc: 'List raw blob names from the IUCN Azure container up to the specified limit. Use force_refresh=true to bypass the 1-hour cache and trigger a fresh Azure listing — useful after uploading new blobs. Respects AZURE_STORAGE_CONTAINER_NAME and AZURE_STORAGE_BLOB_FOLDER env vars.',
+      method: 'GET',
+      url: '/dev/encyclopedia/blob-list-raw',
+      params: [
+        { name: 'limit',         label: 'Limit',         type: 'number', required: false, placeholder: '20', default: '20' },
+        { name: 'force_refresh', label: 'Force Refresh', type: 'select', required: false, options: ['false','true'], default: 'false' },
       ],
     },
   ];
@@ -1430,6 +1563,18 @@
       { label: 'iNaturalist photo found',          pass: d => !!(d.inaturalist_photo || {}).photo_url, warn: true },
       { label: 'full_iucn_raw present',            pass: d => !!d.full_iucn_raw && Object.keys(d.full_iucn_raw).length > 0 },
       { label: 'no LLM calls (note field present)',pass: d => !!d.note },
+    ],
+    'traits_groq_input_split': [
+      { label: 'model present',                    pass: d => !!d.model },
+      { label: 'system_prompt present',            pass: d => typeof d.system_prompt === 'string' && d.system_prompt.length > 50 },
+      { label: 'user_message rendered',            pass: d => typeof d.user_message === 'string' && d.user_message.length > 30 },
+      { label: 'iucn_section present',             pass: d => !!d.iucn_section },
+      { label: 'iucn scientific_name populated',   pass: d => !!(d.iucn_section || {}).scientific_name },
+      { label: 'iucn category populated',          pass: d => !!(d.iucn_section || {}).category },
+      { label: 'iucn references present',          pass: d => Array.isArray((d.iucn_section || {}).references) },
+      { label: 'wikipedia_section present',        pass: d => !!d.wikipedia_section },
+      { label: 'wiki full_text non-empty',         pass: d => typeof ((d.wikipedia_section || {}).full_text) === 'string' && (d.wikipedia_section.full_text || '') !== 'Not found', warn: true },
+      { label: 'wiki full_text >200 chars',        pass: d => ((d.wikipedia_section || {}).full_text || '').length > 200, warn: true },
     ],
     'reporter_threat': [
       { label: 'threat_level present',              pass: d => !!d.threat_level },
@@ -1582,6 +1727,34 @@
       { label: 'severity_distribution present',              pass: d => !!d.severity_distribution && Object.keys(d.severity_distribution).length > 0, warn: true },
       { label: 'reports_last_7_days <= total_reports',       pass: d => (d.reports_last_7_days || 0) <= d.total_reports },
     ],
+    'encyclopedia_random': [
+      { label: 'taxon object present',              pass: d => !!d.taxon },
+      { label: 'red_list_category present',         pass: d => !!d.red_list_category },
+      { label: 'assessment_id present',             pass: d => !!d.assessment_id },
+      { label: 'scientific_name in taxon',          pass: d => !!(d.taxon || {}).scientific_name },
+      { label: 'threats array present',             pass: d => Array.isArray(d.threats) },
+      { label: 'habitats array present',            pass: d => Array.isArray(d.habitats) },
+      { label: 'url (IUCN link) present',           pass: d => !!d.url },
+      { label: 'photo_url set (not placeholder)',   pass: d => typeof d.photo_url === 'string' && d.photo_url !== 'Not available', warn: true },
+      { label: 'photo_url is http(s) URL',          pass: d => typeof d.photo_url === 'string' && d.photo_url.startsWith('http'), warn: true },
+      { label: 'photo_credit set',                  pass: d => typeof d.photo_credit === 'string' && d.photo_credit !== 'Not available', warn: true },
+    ],
+    'encyclopedia_blob_cache_status': [
+      { label: 'cache_populated field present',     pass: d => typeof d.cache_populated === 'boolean' },
+      { label: 'blob_count is a number',            pass: d => typeof d.blob_count === 'number' },
+      { label: 'cache_ttl_seconds equals 3600',     pass: d => d.cache_ttl_seconds === 3600 },
+      { label: 'will_refresh_on_next_call present', pass: d => typeof d.will_refresh_on_next_call === 'boolean' },
+      { label: 'sample_first_5 is array',           pass: d => Array.isArray(d.sample_first_5) },
+      { label: 'note present',                      pass: d => typeof d.note === 'string' && d.note.length > 0 },
+    ],
+    'encyclopedia_blob_list_raw': [
+      { label: 'total_blobs is a number',           pass: d => typeof d.total_blobs === 'number' },
+      { label: 'total_blobs > 0',                   pass: d => (d.total_blobs || 0) > 0 },
+      { label: 'sample is non-empty array',         pass: d => Array.isArray(d.sample) && d.sample.length > 0 },
+      { label: 'limit_applied present',             pass: d => typeof d.limit_applied === 'number' },
+      { label: 'each sample entry is a string',     pass: d => (d.sample || []).every(s => typeof s === 'string') },
+      { label: 'blob names contain no spaces',      pass: d => (d.sample || []).every(s => !s.includes(' ')), warn: true },
+    ],
   };
 
   // ─── Build sidebar ─────────────────────────────────────────────────────────
@@ -1590,7 +1763,9 @@
   const groupReporter  = document.getElementById('group-reporter');
   const groupPipeline   = document.getElementById('group-pipeline');
   const groupSpeciesnet = document.getElementById('group-speciesnet');
-  const groupStats      = document.getElementById('group-stats');
+  const groupStats        = document.getElementById('group-stats');
+  const groupCache        = document.getElementById('group-cache');
+  const groupEncyclopedia = document.getElementById('group-encyclopedia');
 
   FUNCTIONS.forEach(fn => {
     const el = document.createElement('div');
@@ -1599,7 +1774,7 @@
     el.dataset.mod = fn.module;
     el.title = fn.name;
     el.innerHTML = `
-      <span class="method-pill ${fn.method === 'GET' ? 'pill-get' : 'pill-post'}">${fn.method}</span>
+      <span class="method-pill ${fn.method === 'GET' ? 'pill-get' : fn.method === 'DELETE' ? 'pill-delete' : 'pill-post'}">${fn.method}</span>
       ${fn.name}
     `;
     el.addEventListener('click', () => selectFn(fn.id));
@@ -1608,6 +1783,8 @@
                  : fn.module === 'pipeline'      ? groupPipeline
                  : fn.module === 'speciesnet'    ? groupSpeciesnet
                  : fn.module === 'stats'         ? groupStats
+                 : fn.module === 'cache'         ? groupCache
+                 : fn.module === 'encyclopedia'  ? groupEncyclopedia
                  : groupTraits;
     target.appendChild(el);
   });
@@ -1621,12 +1798,16 @@
     const pipelineVisible   = [...groupPipeline.querySelectorAll('.fn-item:not(.hidden)')].length;
     const speciesnetVisible = [...groupSpeciesnet.querySelectorAll('.fn-item:not(.hidden)')].length;
     const statsVisible      = [...groupStats.querySelectorAll('.fn-item:not(.hidden)')].length;
-    document.getElementById('cnt-iucn').textContent        = iucnVisible;
-    document.getElementById('cnt-traits').textContent      = traitsVisible;
-    document.getElementById('cnt-reporter').textContent    = reporterVisible;
-    document.getElementById('cnt-pipeline').textContent    = pipelineVisible;
-    document.getElementById('cnt-speciesnet').textContent  = speciesnetVisible;
-    document.getElementById('cnt-stats').textContent       = statsVisible;
+    const cacheVisible        = [...groupCache.querySelectorAll('.fn-item:not(.hidden)')].length;
+    const encyclopediaVisible = [...groupEncyclopedia.querySelectorAll('.fn-item:not(.hidden)')].length;
+    document.getElementById('cnt-iucn').textContent         = iucnVisible;
+    document.getElementById('cnt-traits').textContent       = traitsVisible;
+    document.getElementById('cnt-reporter').textContent     = reporterVisible;
+    document.getElementById('cnt-pipeline').textContent     = pipelineVisible;
+    document.getElementById('cnt-speciesnet').textContent   = speciesnetVisible;
+    document.getElementById('cnt-stats').textContent        = statsVisible;
+    document.getElementById('cnt-cache').textContent        = cacheVisible;
+    document.getElementById('cnt-encyclopedia').textContent = encyclopediaVisible;
   }
 
   // ─── Sidebar filter ─────────────────────────────────────────────────────────
@@ -1664,6 +1845,8 @@
                    : currentFn.module === 'pipeline'      ? 'mod-pipeline'
                    : currentFn.module === 'speciesnet'    ? 'mod-speciesnet'
                    : currentFn.module === 'stats'         ? 'mod-stats'
+                   : currentFn.module === 'cache'         ? 'mod-cache'
+                   : currentFn.module === 'encyclopedia'  ? 'mod-encyclopedia-fn'
                    : 'mod-traits';
 
     view.innerHTML = `
@@ -1796,7 +1979,7 @@
       let url      = currentFn.url;
       let init     = { method: currentFn.method };
 
-      if (currentFn.method === 'GET') {
+      if (currentFn.method === 'GET' || currentFn.method === 'DELETE') {
         const qs = new URLSearchParams();
         for (const p of currentFn.params) {
           const v = document.getElementById(`p-${p.name}`)?.value?.trim();
@@ -1836,12 +2019,18 @@
       if (currentFn.id === 'traits_full_context' && resp.ok) {
         body.classList.add('fc-layout');
         body.innerHTML = renderFullContext(data);
+      } else if (currentFn.id === 'traits_groq_input_split' && resp.ok) {
+        body.classList.add('fc-layout');
+        body.innerHTML = renderGroqInputSplit(data);
       } else if (currentFn.id === 'reporter_safety' && resp.ok) {
         body.classList.add('fc-layout');
         body.innerHTML = renderSafetyData(data);
       } else if (currentFn.id === 'pipeline_data_handoff' && resp.ok) {
         body.classList.add('fc-layout');
         body.innerHTML = renderPipelineCheck(data);
+      } else if (currentFn.id === 'encyclopedia_random' && resp.ok) {
+        body.classList.add('fc-layout');
+        body.innerHTML = renderEncyclopediaRandom(data);
       } else {
         body.classList.remove('fc-layout');
         body.innerHTML = syntaxHighlight(JSON.stringify(data, null, 2));
@@ -1872,6 +2061,15 @@
         document.getElementById('photo-url-txt').textContent  = data.image_url;
         document.getElementById('photo-attr-txt').textContent =
           data.scientific_name ? `${data.scientific_name}${data.common_name ? ' · ' + data.common_name : ''}` : '—';
+        preview.classList.add('visible');
+      }
+
+      // Encyclopedia random: show species photo when one was found
+      if (currentFn.id === 'encyclopedia_random' && resp.ok && data.photo_url && data.photo_url !== 'Not available') {
+        const preview = document.getElementById('photo-preview');
+        document.getElementById('photo-img').src              = data.photo_url;
+        document.getElementById('photo-url-txt').textContent  = data.photo_url;
+        document.getElementById('photo-attr-txt').textContent = data.photo_credit || '—';
         preview.classList.add('visible');
       }
 
@@ -2089,6 +2287,105 @@
     `;
   }
 
+  // ─── Groq input split renderer ──────────────────────────────────────────────
+  function renderGroqInputSplit(data) {
+    const iucn = data.iucn_section       || {};
+    const wiki = data.wikipedia_section  || {};
+
+    // ── IUCN section fields table ──
+    const iucnFields = [
+      ['scientific_name', iucn.scientific_name],
+      ['common_names',    (iucn.common_names || []).join(', ') || '—'],
+      ['category',        iucn.category],
+      ['assessment_id',   iucn.assessment_id],
+      ['year_published',  iucn.year_published],
+      ['sis_taxon_id',    iucn.sis_taxon_id],
+      ['url',             iucn.url],
+      ['photo_url',       iucn.photo_url],
+      ['photo_credit',    iucn.photo_credit],
+      ['references_count', (iucn.references || []).length],
+    ].map(([k, v]) =>
+      `<tr><td>${esc(k)}</td><td>${esc(v != null ? String(v) : '—')}</td></tr>`
+    ).join('');
+
+    // ── References list ──
+    const refs = (iucn.references || []);
+    const refsHtml = refs.length
+      ? refs.slice(0, 12).map((r, i) => {
+          const title = r.title || r.citation || JSON.stringify(r);
+          return `<div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--border)">
+                    <span style="color:var(--accent);font-family:monospace;font-size:11px;min-width:20px">${i + 1}.</span>
+                    <span style="font-size:11px;color:var(--text);line-height:1.4">${esc(title)}</span>
+                  </div>`;
+        }).join('') + (refs.length > 12 ? `<div style="color:var(--text-muted);font-size:11px;padding-top:6px">… and ${refs.length - 12} more</div>` : '')
+      : `<span style="color:var(--text-muted);font-size:12px">No references</span>`;
+
+    // ── Wiki stats bar ──
+    const wikiChars = wiki.char_count || 0;
+    const wikiPct   = Math.min(100, Math.round(wikiChars / 80)); // rough bar width %
+    const wikiColour = wikiChars === 0 ? 'var(--red)' : wikiChars < 200 ? '#f59e0b' : '#10b981';
+
+    // ── System prompt ──
+    const sysPrompt  = data.system_prompt || '';
+    const userMsg    = data.user_message  || '';
+
+    // Highlight the two sections inside user message
+    const iucnPart = userMsg.replace(/\n/g, '↵').replace(/"wiki_extract".*$/, '<span style="opacity:.4">…(wiki_extract follows)</span>');
+
+    return `
+      <div class="fc-panel">
+        <div class="fc-panel-header fc-ph-iucn">📊 Section 1 — IUCN Data</div>
+        <div class="fc-panel-body">
+          <table class="fc-kv-table"><tbody>${iucnFields}</tbody></table>
+        </div>
+      </div>
+
+      <div class="fc-panel" style="border-color:rgba(99,102,241,.3)">
+        <div class="fc-panel-header" style="background:rgba(99,102,241,.12);color:#a5b4fc">
+          📎 References (${refs.length})
+        </div>
+        <div class="fc-panel-body">${refsHtml}</div>
+      </div>
+
+      <div class="fc-panel">
+        <div class="fc-panel-header fc-ph-wiki">
+          📖 Section 2 — Wikipedia Extract
+          <span style="margin-left:auto;font-size:10px;font-weight:400;letter-spacing:0;text-transform:none">
+            searched as: <strong style="color:var(--text)">${esc(wiki.search_name_used || '—')}</strong>
+          </span>
+        </div>
+        <div class="fc-panel-body">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+            <span style="font-size:11px;color:var(--text-muted)">Characters:</span>
+            <div style="flex:1;height:6px;background:var(--border);border-radius:3px;overflow:hidden">
+              <div style="width:${wikiPct}%;height:100%;background:${wikiColour};border-radius:3px;transition:width .3s"></div>
+            </div>
+            <span style="font-size:12px;font-weight:600;color:${wikiColour}">${wikiChars.toLocaleString()}</span>
+          </div>
+          <div class="fc-wiki-extract">${esc(wiki.full_text || 'Not found')}</div>
+        </div>
+      </div>
+
+      <div class="fc-panel" style="border-color:rgba(14,165,233,.3)">
+        <div class="fc-panel-header" style="background:rgba(14,165,233,.12);color:#7dd3fc">
+          🤖 System Prompt  <span style="font-size:10px;opacity:.6;font-weight:400;letter-spacing:0;text-transform:none">(${sysPrompt.length} chars)</span>
+        </div>
+        <div class="fc-panel-body">
+          <div style="font-size:11px;line-height:1.6;color:var(--text);white-space:pre-wrap">${esc(sysPrompt)}</div>
+        </div>
+      </div>
+
+      <div class="fc-panel" style="border-color:rgba(245,158,11,.3)">
+        <div class="fc-panel-header" style="background:rgba(245,158,11,.12);color:#fcd34d">
+          ✉ User Message (full)  <span style="font-size:10px;opacity:.6;font-weight:400;letter-spacing:0;text-transform:none">${data.model || ''}</span>
+        </div>
+        <div class="fc-panel-body">
+          <div style="font-size:11px;line-height:1.6;color:var(--text);white-space:pre-wrap;word-break:break-all">${esc(userMsg)}</div>
+        </div>
+      </div>
+    `;
+  }
+
   // ─── Pipeline data-handoff renderer ──────────────────────────────────────────
   function renderPipelineCheck(data) {
     const speciesInfo  = data.species_info_agent_output || {};
@@ -2155,6 +2452,127 @@
           <div style="display:flex;flex-direction:column;gap:8px">
             ${mapRows || '<span style="color:var(--text-muted)">No field map available</span>'}
           </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // ─── Encyclopedia random renderer ────────────────────────────────────────────
+  function renderEncyclopediaRandom(data) {
+    const taxon      = data.taxon            || {};
+    const rlCat      = data.red_list_category || {};
+    const sciName    = taxon.scientific_name  || '—';
+    const commonNames = (taxon.common_names || []).filter(c => c.main).map(c => c.name).join(', ') || '—';
+    const catEn      = ((rlCat.description || {}).en) || '—';
+    const catCode    = (rlCat.code || '').toUpperCase();
+    const photoUrl   = data.photo_url   || null;
+    const photoCred  = data.photo_credit || '—';
+    const iucnUrl    = data.url          || null;
+    const year       = data.year_published || '—';
+    const trend      = ((data.population_trend || {}).description || {}).en || '—';
+
+    const codeColours = {
+      'EX':'#6b7280','EW':'#6b7280','CR':'#ef4444','EN':'#f97316','VU':'#f59e0b',
+      'NT':'#eab308','LC':'#10b981','DD':'#94a3b8','NE':'#94a3b8','NA':'#94a3b8',
+    };
+    const catColour = codeColours[catCode] || '#94a3b8';
+
+    const taxonRows = [
+      ['genus',   taxon.genus_name   || '—'],
+      ['family',  taxon.family_name  || '—'],
+      ['order',   taxon.order_name   || '—'],
+      ['class',   taxon.class_name   || '—'],
+      ['kingdom', taxon.kingdom_name || '—'],
+      ['phylum',  taxon.phylum_name  || '—'],
+    ].map(([k,v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('');
+
+    const threatItems = (data.threats || []).slice(0, 6).map(t => {
+      const name = ((t.description || {}).en) || '';
+      return name
+        ? `<div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--border)">
+             <span style="color:var(--red);font-size:11px;min-width:12px">●</span>
+             <span style="font-size:12px;color:var(--text)">${esc(name)}</span>
+           </div>`
+        : '';
+    }).filter(Boolean).join('') || `<span style="color:var(--text-muted);font-size:12px">None listed</span>`;
+
+    const habitatItems = (data.habitats || []).slice(0, 6).map(h => {
+      const name = ((h.description || {}).en) || '';
+      return name
+        ? `<div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--border)">
+             <span style="color:var(--teal);font-size:11px;min-width:12px">●</span>
+             <span style="font-size:12px;color:var(--text)">${esc(name)}</span>
+           </div>`
+        : '';
+    }).filter(Boolean).join('') || `<span style="color:var(--text-muted);font-size:12px">None listed</span>`;
+
+    const photoSection = (photoUrl && photoUrl !== 'Not available')
+      ? `<div class="fc-photo-row">
+           <img src="${esc(photoUrl)}" alt="species" onerror="this.style.display='none'" />
+           <div class="fc-photo-info">
+             <div><span style="color:var(--text-muted)">URL</span><br>
+               <a href="${esc(photoUrl)}" target="_blank"
+                  style="color:#6ee7b7;font-size:11px;word-break:break-all">${esc(photoUrl)}</a>
+             </div>
+             <div style="margin-top:8px"><span style="color:var(--text-muted)">Credit</span><br>
+               <span style="font-size:12px;color:var(--text-dim)">${esc(photoCred)}</span>
+             </div>
+           </div>
+         </div>`
+      : `<span style="color:var(--text-muted);font-size:12px">No CC-licensed photo available</span>`;
+
+    const heroCard = `
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);
+                  padding:16px 18px;margin-bottom:2px">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
+          <div>
+            <div style="font-size:19px;font-weight:600;color:var(--text);font-style:italic">${esc(sciName)}</div>
+            <div style="font-size:13px;color:var(--text-dim);margin-top:3px">${esc(commonNames)}</div>
+          </div>
+          <div style="text-align:right;flex-shrink:0">
+            <div style="font-size:22px;font-weight:700;color:${catColour}">${esc(catCode)}</div>
+            <div style="font-size:11px;color:var(--text-muted)">${esc(catEn)}</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;margin-top:10px">
+          <span style="color:var(--text-muted)">Trend: <strong style="color:var(--text)">${esc(trend)}</strong></span>
+          <span style="color:var(--text-muted)">Year: <strong style="color:var(--text)">${esc(String(year))}</strong></span>
+          ${iucnUrl ? `<a href="${esc(iucnUrl)}" target="_blank" style="color:var(--accent);text-decoration:none">IUCN ↗</a>` : ''}
+        </div>
+      </div>`;
+
+    return `
+      ${heroCard}
+
+      <div class="fc-panel">
+        <div class="fc-panel-header fc-ph-photo">📷 iNaturalist Photo</div>
+        <div class="fc-panel-body">${photoSection}</div>
+      </div>
+
+      <div class="fc-panel">
+        <div class="fc-panel-header fc-ph-iucn">🌿 Taxonomy</div>
+        <div class="fc-panel-body">
+          <table class="fc-kv-table"><tbody>${taxonRows}</tbody></table>
+        </div>
+      </div>
+
+      <div class="fc-panel">
+        <div class="fc-panel-header" style="background:rgba(239,68,68,.12);color:#fca5a5">⚠ Threats</div>
+        <div class="fc-panel-body">${threatItems}</div>
+      </div>
+
+      <div class="fc-panel">
+        <div class="fc-panel-header" style="background:rgba(20,184,166,.12);color:#5eead4">🌳 Habitats</div>
+        <div class="fc-panel-body">${habitatItems}</div>
+      </div>
+
+      <div class="fc-panel" style="border-color:rgba(99,102,241,.3)">
+        <div class="fc-panel-header" style="background:rgba(99,102,241,.10);color:#a5b4fc">
+          { } Full IUCN JSON
+          <span style="font-size:10px;opacity:.55;text-transform:none;letter-spacing:0;font-weight:400;margin-left:4px">${Object.keys(data).length} top-level keys</span>
+        </div>
+        <div class="fc-panel-body">
+          <div class="fc-json">${syntaxHighlight(JSON.stringify(data, null, 2))}</div>
         </div>
       </div>
     `;

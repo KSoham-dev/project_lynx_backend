@@ -369,6 +369,73 @@ async def dev_traits_llm_input_explore(scientific_name: str = Query(...)):
     }
 
 
+@app.get("/dev/traits/groq-input-split", tags=["species_traits"])
+async def dev_traits_groq_input_split(scientific_name: str = Query(...)):
+    """
+    Show the exact input sent to Groq split into two explicit sections:
+      • iucn_section  — all IUCN-sourced fields (assessment, taxonomy, references,
+                        photo URL / credit)
+      • wikipedia_section — the full Wikipedia extract with metadata
+
+    Also returns the verbatim system_prompt and the fully rendered user_message
+    so you can see precisely what the model receives.  No Groq call is made.
+    """
+    import json as _json
+    from pipeline.species_traits import (
+        _normalize, _fetch_blob, _wiki_extract, _inaturalist_photo, _safe_get,
+        _SYSTEM_PROMPT, _USER_PROMPT_TEMPLATE,
+    )
+
+    try:
+        iucn_data = await asyncio.to_thread(_fetch_blob, _normalize(scientific_name))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    taxon = iucn_data.get("taxon") or {}
+    inaturalist_name = taxon.get("scientific_name", scientific_name)
+    common_names_raw = taxon.get("common_names") or []
+    main_names = [c["name"] for c in common_names_raw if c.get("main")]
+    wiki_name = main_names[0] if main_names else inaturalist_name
+
+    wiki_text, photo_pair = await asyncio.gather(
+        asyncio.to_thread(_wiki_extract, wiki_name),
+        asyncio.to_thread(_inaturalist_photo, inaturalist_name),
+    )
+    photo_url, photo_credit = photo_pair
+
+    iucn_section = {
+        "assessment_id":   iucn_data.get("assessment_id"),
+        "year_published":  iucn_data.get("year_published"),
+        "scientific_name": taxon.get("scientific_name"),
+        "common_names":    main_names,
+        "category":        _safe_get(iucn_data, "red_list_category", "description", "en"),
+        "references":      iucn_data.get("references") or [],
+        "url":             iucn_data.get("url"),
+        "sis_taxon_id":    iucn_data.get("sis_taxon_id"),
+        "photo_url":       photo_url or "Not available",
+        "photo_credit":    photo_credit or "Not available",
+    }
+
+    wikipedia_section = {
+        "search_name_used": wiki_name,
+        "char_count":       len(wiki_text),
+        "full_text":        wiki_text,
+    }
+
+    full_payload = {**iucn_section, "wiki_extract": wiki_text}
+    rendered_user_message = _USER_PROMPT_TEMPLATE.format(payload=_json.dumps(full_payload))
+
+    return {
+        "model":              "llama-3.3-70b-versatile (Groq)",
+        "system_prompt":      _SYSTEM_PROMPT,
+        "user_message":       rendered_user_message,
+        "iucn_section":       iucn_section,
+        "wikipedia_section":  wikipedia_section,
+    }
+
+
 @app.get("/dev/traits/llm-input-encyclopedia", tags=["species_traits"])
 async def dev_traits_llm_input_encyclopedia(scientific_name: str = Query(...)):
     """
@@ -1200,7 +1267,253 @@ async def dev_stats_reports(
     return await get_report_stats(latitude=latitude, longitude=longitude, radius_km=radius_km)
 
 
+# ── Image Analysis Cache endpoints ───────────────────────────────────────────
+
+@app.get("/dev/cache/list", tags=["cache"])
+async def dev_cache_list():
+    """
+    List all document IDs stored in the Cosmos image_analysis_cache container.
+    Each entry includes the id (MD5 of image_url), the original image_url, and
+    the TTL value. Sorted newest-first by _ts.
+    """
+    from agents.state.cosmos_client import get_state_container
+    from agents.state.containers import StateContainers
+    try:
+        container = await get_state_container(StateContainers.IMAGE_ANALYSIS_CACHE)
+        docs: list[dict] = []
+        async for page in container.query_items(
+            query="SELECT c.id, c.image_url, c.ttl, c._ts FROM c",
+        ):
+            docs.append(page)
+        docs.sort(key=lambda d: d.get("_ts", 0), reverse=True)
+        return {"count": len(docs), "entries": docs}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/dev/cache/get", tags=["cache"])
+async def dev_cache_get(cache_id: str = Query(..., description="MD5 cache document ID")):
+    """
+    Fetch the full cached ImageAnalysisResult document for a given cache ID.
+    """
+    from agents.state.cosmos_client import get_state_container
+    from agents.state.containers import StateContainers
+    try:
+        container = await get_state_container(StateContainers.IMAGE_ANALYSIS_CACHE)
+        doc = await container.read_item(item=cache_id, partition_key=cache_id)
+        return doc
+    except Exception as exc:
+        status = getattr(exc, "status_code", 500)
+        raise HTTPException(
+            status_code=status if isinstance(status, int) else 500,
+            detail=str(exc),
+        )
+
+
+@app.delete("/dev/cache/delete", tags=["cache"])
+async def dev_cache_delete(cache_id: str = Query(..., description="MD5 cache document ID to delete")):
+    """
+    Permanently delete a single entry from the image_analysis_cache container.
+    The next request for the same image will re-run the full identification pipeline.
+    """
+    from agents.state.cosmos_client import get_state_container
+    from agents.state.containers import StateContainers
+    try:
+        container = await get_state_container(StateContainers.IMAGE_ANALYSIS_CACHE)
+        await container.delete_item(item=cache_id, partition_key=cache_id)
+        return {"deleted": True, "cache_id": cache_id}
+    except Exception as exc:
+        status = getattr(exc, "status_code", 500)
+        raise HTTPException(
+            status_code=status if isinstance(status, int) else 500,
+            detail=str(exc),
+        )
+
+
+# ── Species Context Cache endpoints (used by ExplorerAgent / reporter) ────────
+
+@app.get("/dev/species-cache/list", tags=["cache"])
+async def dev_species_cache_list():
+    """
+    List all entries in the Cosmos species_context_cache container.
+    Includes both 'traits:<name>' entries (Groq pipeline output) and
+    'iucn:<name>' entries (raw IUCN blob). Sorted newest-first.
+    """
+    from agents.state.cosmos_client import get_state_container
+    from agents.state.containers import StateContainers
+    try:
+        container = await get_state_container(StateContainers.SPECIES_CONTEXT_CACHE)
+        docs: list[dict] = []
+        async for page in container.query_items(
+            query="SELECT c.id, c.scientific_name, c.prefix, c.ttl, c._ts FROM c",
+        ):
+            docs.append(page)
+        docs.sort(key=lambda d: d.get("_ts", 0), reverse=True)
+        return {"count": len(docs), "entries": docs}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/dev/species-cache/get", tags=["cache"])
+async def dev_species_cache_get(
+    scientific_name: str = Query(..., description="e.g. Panthera tigris"),
+    prefix: str = Query("traits", description="'traits' or 'iucn'"),
+):
+    """
+    Fetch the full cached payload for a species from species_context_cache.
+    Use prefix='traits' for Groq pipeline output, prefix='iucn' for raw IUCN data.
+    """
+    from agents.layer2.species_cache import read_species_cache
+    result = await read_species_cache(prefix, scientific_name)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"No {prefix} cache entry for '{scientific_name}'")
+    return {"prefix": prefix, "scientific_name": scientific_name, "payload": result}
+
+
+@app.delete("/dev/species-cache/delete", tags=["cache"])
+async def dev_species_cache_delete(
+    scientific_name: str = Query(..., description="e.g. Panthera tigris"),
+    prefix: str = Query("traits", description="'traits' or 'iucn' — or 'all' to delete both"),
+):
+    """
+    Delete species_context_cache entries for the given species.
+    Use prefix='all' to delete both 'traits' and 'iucn' entries at once.
+    Also evicts the matching in-memory TTLCache entry in pipeline/species_traits.py.
+    """
+    from agents.state.cosmos_client import get_state_container
+    from agents.state.containers import StateContainers
+    from agents.layer2.species_cache import _cache_id
+
+    prefixes = ["traits", "iucn"] if prefix == "all" else [prefix]
+    deleted = []
+    errors  = []
+
+    container = await get_state_container(StateContainers.SPECIES_CONTEXT_CACHE)
+    for p in prefixes:
+        doc_id = _cache_id(p, scientific_name)
+        try:
+            await container.delete_item(item=doc_id, partition_key=doc_id)
+            deleted.append(doc_id)
+        except Exception as exc:
+            errors.append({"id": doc_id, "error": str(exc)})
+
+    # Also evict the in-memory pipeline cache (pipeline/species_traits.py _cache)
+    from pipeline.species_traits import _cache, _cache_lock
+    mem_key = scientific_name.strip().lower()
+    with _cache_lock:
+        evicted_mem = mem_key in _cache
+        _cache.pop(mem_key, None)
+
+    return {
+        "deleted_cosmos": deleted,
+        "evicted_in_memory": evicted_mem,
+        "errors": errors,
+    }
+
+
+# ── Encyclopedia Random endpoints ────────────────────────────────────────────
+# These endpoints test the GET /encyclopedia/random implementation without
+# going through the full main.py server.
+
+
+@app.get("/dev/encyclopedia/random", tags=["encyclopedia"])
+async def dev_encyclopedia_random():
+    """
+    Full end-to-end test of the Surprise Me feature.
+
+    Picks a random species from the IUCN blob container, fetches its full
+    IUCN JSON, and enriches it with an iNaturalist photo — identical to what
+    GET /encyclopedia/random returns in the main app.
+
+    Uses the same in-memory blob-name cache (1-hour TTL) so repeated calls
+    do not re-list the container.
+    """
+    from agents.layer0.encyclopedia_router import get_random_species
+    return await get_random_species()
+
+
+@app.get("/dev/encyclopedia/blob-cache-status", tags=["encyclopedia"])
+async def dev_encyclopedia_blob_cache_status():
+    """
+    Inspect the current state of the in-memory blob name cache used by
+    GET /encyclopedia/random.
+
+    Returns how many blob names are cached, when the cache was last populated,
+    how many seconds remain before the next refresh, and the first/last 5
+    entries so you can verify the folder prefix and naming convention.
+    """
+    import time
+    from agents.layer0.encyclopedia_router import (
+        _cached_blob_names, _cache_loaded_at, _BLOB_CACHE_TTL,
+    )
+
+    now     = time.monotonic()
+    count   = len(_cached_blob_names)
+    age_s   = round(now - _cache_loaded_at, 1) if _cache_loaded_at else None
+    ttl_rem = round(_BLOB_CACHE_TTL - age_s, 1) if age_s is not None else None
+
+    return {
+        "cache_populated":   count > 0,
+        "blob_count":        count,
+        "cache_ttl_seconds": _BLOB_CACHE_TTL,
+        "age_seconds":       age_s,
+        "ttl_remaining_seconds": max(ttl_rem, 0) if ttl_rem is not None else None,
+        "will_refresh_on_next_call": (count == 0) or (ttl_rem is not None and ttl_rem <= 0),
+        "sample_first_5":    _cached_blob_names[:5],
+        "sample_last_5":     _cached_blob_names[-5:] if count >= 5 else [],
+        "note": (
+            "Cache is empty — first call to /dev/encyclopedia/random will populate it."
+            if count == 0 else
+            f"Cache holds {count} blob names; refreshes every {_BLOB_CACHE_TTL // 60} minutes."
+        ),
+    }
+
+
+@app.get("/dev/encyclopedia/blob-list-raw", tags=["encyclopedia"])
+async def dev_encyclopedia_blob_list_raw(
+    limit: int = Query(20, ge=1, le=200, description="Max blob names to return"),
+    force_refresh: bool = Query(False, description="Force a fresh listing from Azure, bypassing the cache"),
+):
+    """
+    List raw blob names from the IUCN container, optionally bypassing the cache.
+
+    Useful for:
+    - Verifying the container / folder env vars are correct.
+    - Confirming actual blob naming conventions before a Surprise Me test.
+    - Force-refreshing the cache after new blobs are uploaded.
+
+    Set force_refresh=true to clear the in-memory cache and re-list the container.
+    """
+    import time
+    from agents.layer0 import encyclopedia_router as _er
+
+    if force_refresh:
+        # Clear the module-level cache so _get_blob_names() does a fresh listing
+        _er._cached_blob_names = []
+        _er._cache_loaded_at   = 0.0
+
+    try:
+        blob_names = await _er._get_blob_names()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return {
+        "total_blobs":    len(blob_names),
+        "limit_applied":  limit,
+        "force_refresh":  force_refresh,
+        "sample":         blob_names[:limit],
+        "cache_loaded_at_monotonic": round(_er._cache_loaded_at, 2),
+        "note": (
+            f"Showing first {limit} of {len(blob_names)} blobs. "
+            "Use limit=200 to see more, or inspect the container directly for the full list."
+        ),
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("dev_server:app", host="0.0.0.0", port=8001, reload=True)
+
 

@@ -31,6 +31,8 @@ import asyncio
 import logging
 from typing import Any, Optional
 
+from fastapi import HTTPException
+
 from agents.layer0.receiver import AgentRequest
 from agents.layer2.iucn_fetcher import (
     iucn_habitat_names,
@@ -147,15 +149,22 @@ class ExplorerAgent:
         Merged exploration dict.
         """
         if is_iucn_not_found(iucn_data):
+            scientific_name = iucn_data.get("scientific_name", "unknown")
             logger.warning(
                 "[explorer] Species not in any database: %r",
-                iucn_data.get("scientific_name"),
+                scientific_name,
             )
-            return {"message": iucn_data["message"]}
+            raise HTTPException(
+                status_code=404,
+                detail=iucn_data["message"],
+            )
 
         if not iucn_data:
             logger.warning("[explorer] No IUCN data — cannot enrich")
-            return {"error": "Could not identify species from the provided input."}
+            raise HTTPException(
+                status_code=404,
+                detail="Could not identify the species from the provided input.",
+            )
 
         scientific_name: str = iucn_scientific_name(iucn_data) or ""
         loc_data: dict = tool_results.get("location_context") or {}

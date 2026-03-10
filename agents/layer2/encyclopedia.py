@@ -29,6 +29,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
+from fastapi import HTTPException
+
 from agents.layer0.receiver import AgentRequest
 from agents.layer2.iucn_fetcher import iucn_red_list_category, iucn_scientific_name, is_iucn_not_found
 from agents.layer2.inaturalist import get_inaturalist_photo
@@ -57,24 +59,28 @@ class EncyclopediaAgent:
         dict with IUCN fields + photo_url + photo_credit
         """
         if is_iucn_not_found(iucn_data):
+            scientific_name = iucn_data.get("scientific_name", "unknown")
             logger.warning(
                 "[encyclopedia] Species not in any database: %r",
-                iucn_data.get("scientific_name"),
+                scientific_name,
             )
-            return {"message": iucn_data["message"]}
+            raise HTTPException(
+                status_code=404,
+                detail=iucn_data["message"],
+            )
 
         if not iucn_data:
             # Species Info Agent could not identify or fetch the species.
-            # Surface a clear error rather than an empty dict.
             scientific_name = _best_name(tool_results, request)
             logger.warning("[encyclopedia] No IUCN data available for %r", scientific_name)
-            return {
-                "error": (
+            raise HTTPException(
+                status_code=404,
+                detail=(
                     f"No IUCN data found for '{scientific_name}'."
                     if scientific_name
                     else "Could not identify the species from the provided input."
-                )
-            }
+                ),
+            )
 
         scientific_name: str = iucn_scientific_name(iucn_data) or ""
         logger.info("[encyclopedia] Fetching iNaturalist photo for %r", scientific_name)
