@@ -67,6 +67,36 @@ async def register_device(user_id: str, device: DeviceInfo) -> UserDocument:
     return user
 
 
+async def get_user_by_email(email: str) -> Optional[UserDocument]:
+    """Retrieve a user by their email using a cross-partition query."""
+    container = await get_data_container(DataContainers.USERS)
+    query = "SELECT * FROM c WHERE c.email = @email"
+    parameters = [{"name": "@email", "value": email}]
+    try:
+        items = [item async for item in container.query_items(
+            query=query,
+            parameters=parameters
+        )]
+        if not items:
+            return None
+        return UserDocument.from_cosmos(items[0])
+    except Exception as e:
+        logger.error("Error querying user by email: %s", e)
+        return None
+
+async def get_all_users() -> list[dict]:
+    """Retrieve all users across partitions for dev bench."""
+    container = await get_data_container(DataContainers.USERS)
+    query = "SELECT c.id, c.user_id, c.name, c.email, c.role, c.last_active, c.created_at, c.devices FROM c"
+    try:
+        items = [item async for item in container.query_items(
+            query=query
+        )]
+        return items
+    except Exception as e:
+        logger.error("Error querying all users: %s", e)
+        return []
+
 # ── reports ───────────────────────────────────────────────────────────────────
 
 async def create_report(

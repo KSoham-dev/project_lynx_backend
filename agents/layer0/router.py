@@ -16,11 +16,13 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from agents.auth import get_current_user
 from agents.layer0.orchestrator import run_orchestrator
 from agents.layer0.receiver import ReceiverInput, run_receiver
+from agents.state.data_schemas import UserDocument
 
 logger = logging.getLogger(__name__)
 
@@ -40,17 +42,17 @@ class ChatResponse(BaseModel):
 # ── Route ─────────────────────────────────────────────────────────────────────
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat(payload: ReceiverInput, request: Request) -> ChatResponse:
+async def chat(
+    payload: ReceiverInput,
+    request: Request,
+    current_user: UserDocument = Depends(get_current_user)
+) -> ChatResponse:
     """
     Primary entry point for the Prahari agent system.
-
-    - **user_id**: unique user/device identifier
-    - **session_id**: resume an existing conversation (omit to start fresh)
-    - **query_type**: ``report`` | ``explore`` | ``encyclopedia``
-    - **message**: user's text message (optional)
-    - **image_url**: optional image URL
-    - **latitude** / **longitude**: optional GPS coordinates
     """
+    # Force payload to use the authenticated user's ID to prevent impersonation
+    payload.user_id = current_user.user_id
+
     try:
         agent_request = await run_receiver(payload, request)
         response_text, structured_data = await run_orchestrator(agent_request)

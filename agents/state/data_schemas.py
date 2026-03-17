@@ -66,6 +66,15 @@ class DeviceInfo(BaseModel):
     registered_at: datetime = Field(default_factory=_utcnow)
 
 
+class ActiveSession(BaseModel):
+    """
+    Tracking a stateful JWT session to allow strict invalidation (logouts).
+    """
+    jti: str
+    created_at: datetime = Field(default_factory=_utcnow)
+    expires_at: datetime
+
+
 # ── users ─────────────────────────────────────────────────────────────────────
 
 class UserDocument(BaseModel):
@@ -82,14 +91,33 @@ class UserDocument(BaseModel):
     id: str                                               # user_id — Cosmos PK
     user_id: str
     name: str = ""
-    role: UserRole = UserRole.RANGER
+    mobile_number: Optional[str] = None
+    email: Optional[str] = None
+    hashed_password: Optional[str] = None
+    device_fsm_token: Optional[str] = None
+    role: UserRole = UserRole.PUBLIC
     forest_zone: Optional[str] = None
     district: Optional[str] = None
     state: Optional[str] = None
     devices: list[DeviceInfo] = Field(default_factory=list)
+    active_sessions: list[ActiveSession] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=_utcnow)
     last_active: datetime = Field(default_factory=_utcnow)
     preferences: dict[str, Any] = Field(default_factory=dict)
+
+    def cleanup_sessions(self) -> None:
+        """Remove expired active sessions."""
+        now = _utcnow()
+        self.active_sessions = [s for s in self.active_sessions if s.expires_at > now]
+
+    def add_session(self, jti: str, expires_at: datetime) -> None:
+        """Add a new session and cleanup expired ones."""
+        self.cleanup_sessions()
+        self.active_sessions.append(ActiveSession(jti=jti, expires_at=expires_at))
+
+    def remove_session(self, jti: str) -> None:
+        """Remove a session by jti."""
+        self.active_sessions = [s for s in self.active_sessions if s.jti != jti]
 
     def upsert_device(self, device: DeviceInfo) -> None:
         """Replace existing device entry (by device_id) or append a new one."""

@@ -5,3 +5,5 @@ model
 ppt/
 .env
 sample_pipeline.py
+__pycache__/
+.pytest_cache/
