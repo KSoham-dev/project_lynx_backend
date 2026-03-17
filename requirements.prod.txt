@@ -43,3 +43,8 @@ opencv-python-headless==4.10.0.84
 scipy==1.17.1
 shapely==2.1.2
 reverse_geocoder==1.5.1
+
+# Auth
+bcrypt
+PyJWT
+python-multipart

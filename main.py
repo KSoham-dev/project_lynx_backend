@@ -1,7 +1,7 @@
 from dotenv import load_dotenv
 load_dotenv()  # must be first — populates os.environ before any module reads it
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Depends
 from pydantic import BaseModel, HttpUrl
 from contextlib import asynccontextmanager
 from typing import Any, Optional
@@ -9,9 +9,12 @@ import os
 import uvicorn
 
 from pipeline.species_traits import run_pipeline
+from agents.auth import get_current_user
+from agents.state.data_schemas import UserDocument
 from agents.layer0.router import router as agent_router
 from agents.layer0.stats_router import router as stats_router
 from agents.layer0.encyclopedia_router import router as encyclopedia_router
+from agents.layer0.auth_router import router as auth_router
 from agents.state.cosmos_client import close_cosmos_clients
 from agents.layer1.image_agent import set_speciesnet_model
 
@@ -63,6 +66,7 @@ app = FastAPI(
 )
 
 # ── Agent router (Layer 0: Orchestrator + Context/State) ───────────────────────
+app.include_router(auth_router)
 app.include_router(agent_router)
 app.include_router(stats_router)
 app.include_router(encyclopedia_router)
@@ -140,7 +144,7 @@ def health():
 
 
 @app.post("/predict", response_model=PredictionResponse, tags=["Prediction"])
-def predict(request: PredictRequest):
+def predict(request: PredictRequest, current_user: UserDocument = Depends(get_current_user)):
     """
     Run species classification on a single image.
 
@@ -186,7 +190,7 @@ def predict(request: PredictRequest):
 
 
 @app.post("/predict/batch", response_model=list[PredictionResponse], tags=["Prediction"])
-def predict_batch(requests_list: list[PredictRequest]):
+def predict_batch(requests_list: list[PredictRequest], current_user: UserDocument = Depends(get_current_user)):
     """
     Run species classification on multiple images in a single call.
 
@@ -255,7 +259,8 @@ def species_traits(
         description="Scientific name of the species (e.g. 'Caridina typus').",
         examples=["Caridina typus", "Panthera leo"],
         min_length=3,
-    )
+    ),
+    current_user: UserDocument = Depends(get_current_user)
 ) -> SpeciesTraitsResponse:
     """
     Fetch IUCN data from Azure Blob Storage, enrich it with Wikipedia text and

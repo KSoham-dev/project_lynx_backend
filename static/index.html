@@ -828,6 +828,14 @@
           <span class="fn-count" id="cnt-encyclopedia"></span>
         </div>
       </div>
+
+      <div id="group-users">
+        <div class="group-header" style="margin-top:4px">
+          <div class="group-icon" style="background: rgba(236,72,153,.15); color: #f472b6;">👤</div>
+          <span class="group-label-text">Users / Auth</span>
+          <span class="fn-count" id="cnt-users"></span>
+        </div>
+      </div>
     </aside>
 
     <!-- Main panel -->
@@ -1441,6 +1449,16 @@
         { name: 'force_refresh', label: 'Force Refresh', type: 'select', required: false, options: ['false','true'], default: 'false' },
       ],
     },
+    // ── Users / Auth ──
+    {
+      id: 'dev_users_list',
+      name: 'dev_users_list',
+      module: 'users',
+      desc: 'Retrieves a list of all registered users (public & rangers) from the database.',
+      method: 'GET',
+      url: '/dev/users',
+      params: [],
+    },
   ];
 
   // ─── Output checks registry ────────────────────────────────────────────────
@@ -1766,6 +1784,7 @@
   const groupStats        = document.getElementById('group-stats');
   const groupCache        = document.getElementById('group-cache');
   const groupEncyclopedia = document.getElementById('group-encyclopedia');
+  const groupUsers        = document.getElementById('group-users');
 
   FUNCTIONS.forEach(fn => {
     const el = document.createElement('div');
@@ -1785,6 +1804,7 @@
                  : fn.module === 'stats'         ? groupStats
                  : fn.module === 'cache'         ? groupCache
                  : fn.module === 'encyclopedia'  ? groupEncyclopedia
+                 : fn.module === 'users'         ? groupUsers
                  : groupTraits;
     target.appendChild(el);
   });
@@ -1800,6 +1820,7 @@
     const statsVisible      = [...groupStats.querySelectorAll('.fn-item:not(.hidden)')].length;
     const cacheVisible        = [...groupCache.querySelectorAll('.fn-item:not(.hidden)')].length;
     const encyclopediaVisible = [...groupEncyclopedia.querySelectorAll('.fn-item:not(.hidden)')].length;
+    const usersVisible        = [...groupUsers.querySelectorAll('.fn-item:not(.hidden)')].length;
     document.getElementById('cnt-iucn').textContent         = iucnVisible;
     document.getElementById('cnt-traits').textContent       = traitsVisible;
     document.getElementById('cnt-reporter').textContent     = reporterVisible;
@@ -1808,6 +1829,7 @@
     document.getElementById('cnt-stats').textContent        = statsVisible;
     document.getElementById('cnt-cache').textContent        = cacheVisible;
     document.getElementById('cnt-encyclopedia').textContent = encyclopediaVisible;
+    document.getElementById('cnt-users').textContent        = usersVisible;
   }
 
   // ─── Sidebar filter ─────────────────────────────────────────────────────────

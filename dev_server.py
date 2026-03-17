@@ -202,6 +202,14 @@ async def dev_traits_run_pipeline(scientific_name: str = Query(...)):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
+# ── User details (Authentication / Dev) ────────────────────────────────────────
+
+@app.get("/dev/users", tags=["dev_users"])
+async def dev_users_list():
+    """List all registered users from CosmosDB."""
+    from agents.state.data_store import get_all_users
+    users = await get_all_users()
+    return {"count": len(users), "users": users}
 
 @app.get("/dev/traits/full-context", tags=["species_traits"])
 async def dev_traits_full_context(scientific_name: str = Query(...)):
